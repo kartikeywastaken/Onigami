@@ -1,5 +1,5 @@
 // Package agent defines what an "agent" is in onigami and, most importantly,
-// the loop that drives one. Read this file first — everything else exists to
+// the loop that drives one. Read this file first  everything else exists to
 // serve this loop.
 //
 // An agent is simple: a role, a system prompt that defines its job, a set of
@@ -12,6 +12,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"onigami/internal/llm"
 )
 
@@ -26,20 +28,11 @@ const (
 	RoleExploiter    Role = "exploiter"    // runs gated, real exploitation (Metasploit)
 )
 
-// Task is the unit of work handed to an agent.
-//
-// Objective is the standing goal (useful for logging/UI). Brief is the actual,
-// freshly-written context the agent starts from — for a worker this is the
-// tailored instruction the orchestrator composes ("host X runs Apache 2.4.49,
-// research known issues"), not a generic prompt.
 type Task struct {
 	Objective string
 	Brief     string
 }
 
-// Report is what an agent returns when it's done: its role and the final
-// written summary. (We'll grow this into structured findings later; a plain
-// summary is enough to get the architecture working and reviewable.)
 type Report struct {
 	Role    Role
 	Summary string
@@ -168,6 +161,12 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 	// issued this run, so the loop guard can refuse endless identical calls.
 	callCounts := map[string]int{}
 
+	// reportNudges counts how many times we've had to prod the model to actually
+	// WRITE its report. Verbose reasoning models sometimes spend a whole turn in
+	// chain-of-thought (or get cut off by the length limit) and emit no content
+	// text at all — which would otherwise yield an empty report.
+	reportNudges := 0
+
 	for turn := 0; turn < a.MaxTurns; turn++ {
 		// Respect cancellation (e.g. the user quits the TUI mid-run).
 		if err := ctx.Err(); err != nil {
@@ -205,7 +204,33 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 		// If the model didn't ask for any tools, it's finished thinking: its
 		// text is the final report.
 		if resp.StopReason != llm.StopToolUse {
-			report := Report{Role: a.Role, Summary: resp.Message.Text()}
+			text := resp.Message.Text()
+
+			// Empty final answer. This happens when the model poured the whole
+			// turn into its reasoning channel, or hit the length limit mid-thought
+			// (StopMaxTokens) before writing any content. Prod it to actually
+			// write the report — a bounded number of times — instead of returning
+			// nothing.
+			if strings.TrimSpace(text) == "" && reportNudges < 2 {
+				reportNudges++
+				obs.emit(Event{Agent: a.Role, Kind: EventError,
+					Text:  "produced no written report (all reasoning or cut off by the length limit); nudging it to write one",
+					Depth: a.Depth})
+				msgs = append(msgs, llm.UserText("Your last turn produced no written report — it was either all internal reasoning or cut off by the length limit. Reply now with ONLY your final report: concise, no long reasoning."))
+				continue
+			}
+
+			// Still empty after nudging: fall back to the reasoning text so the
+			// caller gets *something* grounded rather than a blank summary.
+			if strings.TrimSpace(text) == "" {
+				if r := strings.TrimSpace(resp.Reasoning); r != "" {
+					text = r
+				} else {
+					text = "(the worker produced no written report)"
+				}
+			}
+
+			report := Report{Role: a.Role, Summary: text}
 			obs.emit(Event{Agent: a.Role, Kind: EventReport, Text: report.Summary, Depth: a.Depth})
 			return report, nil
 		}

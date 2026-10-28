@@ -180,6 +180,22 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 			continue
 		}
 
+		// Malformed tool call: the model emitted invalid JSON arguments or a bad
+		// tool name, which Groq rejects with 400 tool_use_failed. It's a sampling
+		// fluke — re-sampling usually yields a valid call — so retry rather than
+		// letting one bad generation kill the whole engagement.
+		if status == http.StatusBadRequest && attempt < g.maxAttempts &&
+			(strings.Contains(string(respBytes), "tool_use_failed") ||
+				strings.Contains(string(respBytes), "Failed to parse tool call")) {
+			wait := g.backoff(attempt)
+			fmt.Fprintf(os.Stderr, "[groq] malformed tool call (400 tool_use_failed); waiting %s then retrying (%d/%d)\n",
+				wait.Round(time.Second), attempt, g.maxAttempts)
+			if !sleepCtx(ctx, wait) {
+				return Response{}, ctx.Err()
+			}
+			continue
+		}
+
 		if status != http.StatusOK {
 			// Surface Groq's own error text — it usually says exactly what's wrong.
 			return Response{}, fmt.Errorf("groq returned %d %s: %s",

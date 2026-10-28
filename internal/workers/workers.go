@@ -99,9 +99,11 @@ issues), cve_search and cve_detail, and your NOTEBOOK: record_finding and
 list_findings.
 
 FOLLOW THIS FIXED ORDER. Work ONE phase at a time, in sequence. Do not skip ahead
-and do not loop back to a finished phase. The instant you learn a fact, call
-record_finding; whenever you need to recall something, call list_findings instead
-of re-running a tool.
+and do not loop back to a finished phase. Use your NOTEBOOK as working memory:
+the moment you learn a key fact (an open service+version, a real endpoint/param,
+a CVE), record_finding it — that is what lets you avoid re-running a tool to
+recall something. You don't need list_findings during recon; call it once, in
+Phase 5, to write the report from your recorded facts.
 
   PHASE 1 — TRIAGE: http_request HEAD on http:// and https:// of the target, and
     tcp_probe a couple of key ports. Learn: is it up, is it web, what server?
@@ -124,8 +126,8 @@ EVIDENCE DISCIPLINE:
   timeout, or OUT OF SCOPE refusal is NOT a result and NOT a success.
 - Never invent an endpoint, parameter, response, or CVE id. If you lack evidence,
   say "unconfirmed / not tested" and lower your confidence.
-- Before repeating ANY call, check list_findings — if it's already recorded, use
-  that instead of running the tool again.
+- Never re-run a tool just to recall its output — it's in your notebook (or a
+  recent turn). Reserve list_findings for Phase 5.
 
 When Phase 5 is done, stop. Your report: the target, each open service+version,
 the endpoints/params found, the relevant CVE(s) with evidence, and a calibrated
@@ -175,8 +177,8 @@ func NewAnalyst(client llm.Client, model string, tools *agent.ToolSet, depth int
 		Tools:           tools,
 		LLM:             client,
 		Model:           model,
-		MaxTurns:        12,
-		MaxOutputTokens: 1024, // tool calls are tiny; the final report fits easily
+		MaxTurns:        24,   // 5 phases + notebook bookkeeping need headroom
+		MaxOutputTokens: 1536, // tool calls are tiny; the final report fits easily
 		Depth:           depth,
 	}
 }
@@ -215,7 +217,7 @@ func NewExploiter(client llm.Client, model string, tools *agent.ToolSet, depth i
 		LLM:             client,
 		Model:           model,
 		MaxTurns:        12,
-		MaxOutputTokens: 1024,
+		MaxOutputTokens: 1536,
 		Depth:           depth,
 	}
 }
@@ -229,8 +231,8 @@ func NewWebTester(client llm.Client, model string, tools *agent.ToolSet, depth i
 		Tools:           tools,
 		LLM:             client,
 		Model:           model,
-		MaxTurns:        14, // active testing chains more steps than pure recon
-		MaxOutputTokens: 1024,
+		MaxTurns:        20, // active testing chains more steps than pure recon
+		MaxOutputTokens: 1536,
 		Depth:           depth,
 	}
 }

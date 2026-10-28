@@ -159,8 +159,8 @@ func New(cfg Config) *agent.Agent {
 		Tools:           agent.NewToolSet(crew...),
 		LLM:             cfg.Orchestrator,
 		Model:           orchModel,
-		MaxTurns:        20,
-		MaxOutputTokens: 1024, // it writes briefs and a final summary, nothing large
+		MaxTurns:        24,   // room to dispatch workers, re-dispatch on failure, and still report
+		MaxOutputTokens: 1536, // it writes briefs and a final summary, nothing large
 		Depth:           0,
 	}
 }
