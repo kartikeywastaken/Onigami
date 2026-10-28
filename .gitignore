@@ -1,0 +1,9 @@
+# Secrets — never commit your API key.
+.env
+
+# Build output.
+/onigami
+/bin/
+
+# Editor/OS cruft.
+.DS_Store
