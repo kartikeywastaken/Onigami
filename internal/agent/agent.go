@@ -56,6 +56,7 @@ type EventKind string
 
 const (
 	EventStart      EventKind = "start"       // an agent began a task
+	EventThinking   EventKind = "thinking"    // the model's chain-of-thought (reasoning)
 	EventToolCall   EventKind = "tool_call"   // agent is invoking a tool
 	EventToolResult EventKind = "tool_result" // a tool returned
 	EventMessage    EventKind = "message"     // the agent produced text
@@ -135,8 +136,15 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 			return Report{}, fmt.Errorf("%s: model call failed: %w", a.Role, err)
 		}
 
-		// Record the model's turn in the conversation.
+		// Record the model's turn in the conversation. (We intentionally do NOT
+		// store reasoning back into msgs — it's for display only, and resending it
+		// would waste tokens.)
 		msgs = append(msgs, resp.Message)
+
+		// Surface the model's reasoning so you can see WHY it's about to act.
+		if resp.Reasoning != "" {
+			obs.emit(Event{Agent: a.Role, Kind: EventThinking, Text: resp.Reasoning, Depth: a.Depth})
+		}
 
 		if text := resp.Message.Text(); text != "" {
 			obs.emit(Event{Agent: a.Role, Kind: EventMessage, Text: text, Depth: a.Depth})
@@ -154,8 +162,11 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 		// into a single user turn.
 		var results []llm.Content
 		for _, call := range resp.Message.ToolCalls() {
+			// Include the arguments so you can see exactly what it's doing
+			// (e.g. nmap {"target":"scanme.nmap.org"}), not just the tool name.
 			obs.emit(Event{Agent: a.Role, Kind: EventToolCall,
-				Text: call.ToolName, Depth: a.Depth})
+				Text:  fmt.Sprintf("%s %s", call.ToolName, truncate(string(call.ToolInput), 160)),
+				Depth: a.Depth})
 
 			result := a.Tools.Run(ctx, call)
 

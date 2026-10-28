@@ -150,6 +150,7 @@ type Request struct {
 type Response struct {
 	Message    Message    // the assistant's turn (text and/or tool calls)
 	StopReason StopReason // why it stopped
+	Reasoning  string     // the model's chain-of-thought, if it exposed one
 }
 
 // Client is the one interface the rest of onigami depends on. The Groq client

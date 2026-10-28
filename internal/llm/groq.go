@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -47,15 +51,17 @@ func NewGroq(apiKey string) *Groq {
 // which keeps requests clean and valid.
 
 type groqRequest struct {
-	Model     string        `json:"model"`
-	Messages  []groqMessage `json:"messages"`
-	Tools     []groqTool    `json:"tools,omitempty"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
+	Model           string        `json:"model"`
+	Messages        []groqMessage `json:"messages"`
+	Tools           []groqTool    `json:"tools,omitempty"`
+	MaxTokens       int           `json:"max_tokens,omitempty"`
+	ReasoningFormat string        `json:"reasoning_format,omitempty"` // "parsed" for reasoning models
 }
 
 type groqMessage struct {
 	Role       string         `json:"role"`                   // system | user | assistant | tool
 	Content    string         `json:"content"`                // text (may be empty for tool-call turns)
+	Reasoning  string         `json:"reasoning,omitempty"`    // chain-of-thought (reasoning models)
 	ToolCalls  []groqToolCall `json:"tool_calls,omitempty"`   // assistant asking for tools
 	ToolCallID string         `json:"tool_call_id,omitempty"` // which call a "tool" message answers
 }
@@ -92,6 +98,10 @@ type groqResponse struct {
 }
 
 // Complete implements the Client interface: translate, send, translate back.
+//
+// On the free tier, token-per-minute limits mean HTTP 429 is expected, not
+// exceptional. So instead of failing, we read how long Groq says to wait, sleep
+// that long (respecting cancellation), and retry — up to a few times.
 func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 	body := groqRequest{
 		Model:     req.Model,
@@ -99,46 +109,74 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 		Tools:     toGroqTools(req.Tools),
 		MaxTokens: req.MaxTokens,
 	}
+	// Ask reasoning models to return their chain-of-thought in a separate field
+	// (so we can show it). Only for models that support it, or the call errors.
+	if isReasoningModel(req.Model) {
+		body.ReasoningFormat = "parsed"
+	}
 
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return Response{}, fmt.Errorf("encode request: %w", err)
 	}
 
+	const maxAttempts = 6
+	for attempt := 1; ; attempt++ {
+		respBytes, status, headers, err := g.send(ctx, raw)
+		if err != nil {
+			return Response{}, err
+		}
+
+		if status == http.StatusTooManyRequests && attempt < maxAttempts {
+			wait := parseRetryAfter(headers, string(respBytes))
+			fmt.Fprintf(os.Stderr, "[groq] rate limited; waiting %s then retrying (%d/%d)\n",
+				wait.Round(time.Second), attempt, maxAttempts)
+			select {
+			case <-time.After(wait):
+				continue
+			case <-ctx.Done():
+				return Response{}, ctx.Err()
+			}
+		}
+
+		if status != http.StatusOK {
+			// Surface Groq's own error text — it usually says exactly what's wrong.
+			return Response{}, fmt.Errorf("groq returned %d %s: %s",
+				status, http.StatusText(status), strings.TrimSpace(string(respBytes)))
+		}
+
+		var gr groqResponse
+		if err := json.Unmarshal(respBytes, &gr); err != nil {
+			return Response{}, fmt.Errorf("decode response: %w", err)
+		}
+		if gr.Error != nil {
+			return Response{}, fmt.Errorf("groq error: %s", gr.Error.Message)
+		}
+		if len(gr.Choices) == 0 {
+			return Response{}, fmt.Errorf("groq returned no choices")
+		}
+		return fromGroqChoice(gr.Choices[0].Message, gr.Choices[0].FinishReason), nil
+	}
+}
+
+// send performs one HTTP attempt, returning the raw body, status code, and
+// response headers.
+func (g *Groq) send(ctx context.Context, raw []byte) ([]byte, int, http.Header, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		g.baseURL+"/chat/completions", bytes.NewReader(raw))
 	if err != nil {
-		return Response{}, err
+		return nil, 0, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
 
 	resp, err := g.http.Do(httpReq)
 	if err != nil {
-		return Response{}, fmt.Errorf("groq request failed: %w", err)
+		return nil, 0, nil, fmt.Errorf("groq request failed: %w", err)
 	}
 	defer resp.Body.Close()
-
-	respBytes, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		// Surface Groq's own error text — usually it tells you exactly what's
-		// wrong (bad model id, rate limit, expired key).
-		return Response{}, fmt.Errorf("groq returned %s: %s", resp.Status, string(respBytes))
-	}
-
-	var gr groqResponse
-	if err := json.Unmarshal(respBytes, &gr); err != nil {
-		return Response{}, fmt.Errorf("decode response: %w", err)
-	}
-	if gr.Error != nil {
-		return Response{}, fmt.Errorf("groq error: %s", gr.Error.Message)
-	}
-	if len(gr.Choices) == 0 {
-		return Response{}, fmt.Errorf("groq returned no choices")
-	}
-
-	return fromGroqChoice(gr.Choices[0].Message, gr.Choices[0].FinishReason), nil
+	b, _ := io.ReadAll(resp.Body)
+	return b, resp.StatusCode, resp.Header, nil
 }
 
 // --- outbound translation: our types → Groq's ----------------------------
@@ -248,7 +286,42 @@ func fromGroqChoice(m groqMessage, finish string) Response {
 		stop = StopToolUse
 	}
 
-	return Response{Message: msg, StopReason: stop}
+	return Response{Message: msg, StopReason: stop, Reasoning: m.Reasoning}
+}
+
+// --- helpers --------------------------------------------------------------
+
+// isReasoningModel reports whether a model exposes a chain-of-thought we can
+// request separately. Our available reasoning models are gpt-oss* and qwen3*.
+func isReasoningModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "gpt-oss") || strings.Contains(m, "qwen3")
+}
+
+// retryMsgRe pulls the "try again in 23.9s" hint out of a 429 body.
+var retryMsgRe = regexp.MustCompile(`try again in ([0-9]+(?:\.[0-9]+)?)s`)
+
+// parseRetryAfter decides how long to wait before retrying a 429: it prefers
+// the Retry-After header, falls back to the body's "try again in Xs" hint, and
+// otherwise uses a small default. A 1s cushion is added and the wait is capped.
+func parseRetryAfter(h http.Header, body string) time.Duration {
+	var secs float64
+	if v := h.Get("retry-after"); v != "" {
+		secs, _ = strconv.ParseFloat(v, 64)
+	}
+	if secs == 0 {
+		if m := retryMsgRe.FindStringSubmatch(body); m != nil {
+			secs, _ = strconv.ParseFloat(m[1], 64)
+		}
+	}
+	if secs == 0 {
+		secs = 5 // sensible default when Groq didn't say
+	}
+	d := time.Duration(secs*float64(time.Second)) + time.Second // +1s cushion
+	if d > 90*time.Second {
+		d = 90 * time.Second
+	}
+	return d
 }
 
 // compile-time check that *Groq satisfies the Client interface.

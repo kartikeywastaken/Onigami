@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -29,6 +28,8 @@ func main() {
 		switch e.Kind {
 		case agent.EventStart:
 			fmt.Printf("%s▶ %s  started: %s\n", indent, label, e.Text)
+		case agent.EventThinking:
+			fmt.Printf("%s  %s  reasoning:\n%s\n", indent, label, indentBlock(e.Text, indent+"      "))
 		case agent.EventToolCall:
 			fmt.Printf("%s  %s  → calling tool: %s\n", indent, label, e.Text)
 		case agent.EventToolResult:
@@ -42,9 +43,9 @@ func main() {
 		}
 	}
 
-	// Build the real Groq client. If the key is missing we stop with a clear
-	// message pointing at the .env file.
-	client, model, err := buildClient()
+	// Build the real Groq client for the orchestrator. If the key is missing we
+	// stop with a clear message pointing at the .env file.
+	orchClient, model, err := buildClient()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -58,14 +59,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The proceed/hold gate the Exploit-Dev's output passes through.
-	approve := terminalApprover
+	// Per-agent keys: each specialist can use its own API key, which only helps
+	// with rate limits if the keys belong to SEPARATE Groq accounts (limits are
+	// per account, not per key). Missing keys fall back to the main one.
+	analystClient := clientFromEnv("GROQ_API_KEY_ANALYST", orchClient)
+	exploitClient := clientFromEnv("GROQ_API_KEY_EXPLOIT", orchClient)
 
-	orch := orchestrator.New(client, model, sc, obs, approve)
+	orch := orchestrator.New(orchestrator.Config{
+		Orchestrator: orchClient,
+		Analyst:      analystClient,
+		ExploitDev:   exploitClient,
+		Model:        model,
+		Scope:        sc,
+		Observer:     obs,
+		Approver:     terminalApprover, // proceed/hold gate on the PoC
+	})
 
 	fmt.Printf("\nonigami — engagement (groq: %s)\n", model)
 	fmt.Printf("scope:    %s\n", sc)
 	fmt.Printf("scanners: %s\n", tools.ScannerStatus())
+	fmt.Printf("keys:     %s\n", keyStatus())
 	fmt.Println(strings.Repeat("─", 64))
 
 	objective := "Assess the in-scope target(s) for exploitable vulnerabilities and, if you confirm one, have the Exploit-Dev produce a proof-of-concept."
@@ -106,6 +119,27 @@ func buildClient() (llm.Client, string, error) {
 		model = defaultGroqModel
 	}
 	return llm.NewGroq(key), model, nil
+}
+
+// clientFromEnv returns a Groq client built from the key in env var `name`, or
+// `fallback` if that var is unset. Lets each agent optionally use its own key.
+func clientFromEnv(name string, fallback llm.Client) llm.Client {
+	if k := strings.TrimSpace(os.Getenv(name)); k != "" {
+		return llm.NewGroq(k)
+	}
+	return fallback
+}
+
+// keyStatus reports, for the startup banner, which agents have their own key.
+func keyStatus() string {
+	own := func(name string) string {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return "own"
+		}
+		return "shared"
+	}
+	return fmt.Sprintf("orchestrator=main  analyst=%s  exploit=%s",
+		own("GROQ_API_KEY_ANALYST"), own("GROQ_API_KEY_EXPLOIT"))
 }
 
 // mustCwd returns the current working directory for a friendlier error message,
