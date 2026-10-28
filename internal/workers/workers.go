@@ -40,10 +40,11 @@ var briefSchema = json.RawMessage(`{
 // fresh on every dispatch, so every worker starts clean — that's the
 // "ephemeral, stateless" rule made literal.
 type DispatchTool struct {
-	name  string
-	desc  string
-	build func() *agent.Agent // makes a NEW worker each call
-	obs   agent.Observer      // passed down so nested work is observable
+	name    string
+	desc    string
+	build   func() *agent.Agent // makes a NEW worker each call
+	obs     agent.Observer      // passed down so nested work is observable
+	approve agent.Approver      // optional human gate on the worker's output (nil = none)
 }
 
 // Name, Description, and Schema satisfy the agent.Tool interface.
@@ -70,6 +71,13 @@ func (d *DispatchTool) Run(ctx context.Context, input json.RawMessage) (string, 
 	}, d.obs)
 	if err != nil {
 		return "", fmt.Errorf("%s worker failed: %w", worker.Role, err)
+	}
+
+	// Human-in-the-loop gate: if an approver is set, the user reviews this
+	// worker's output (which was just streamed to them) and chooses to proceed
+	// or hold. On hold, we tell the orchestrator to stop rather than build on it.
+	if !d.approve.Ask(ctx, worker.Role, report.Summary) {
+		return "The user reviewed this output and chose to HOLD. Do not proceed with or act on it. Stop here and report that the engagement was paused at the user's request.", nil
 	}
 	return report.Summary, nil
 }
@@ -122,7 +130,9 @@ func NewExploitDev(client llm.Client, model string, tools *agent.ToolSet, depth 
 	}
 }
 
-// NewDispatchTool wires a worker builder up as a tool the orchestrator can call.
-func NewDispatchTool(name, desc string, build func() *agent.Agent, obs agent.Observer) *DispatchTool {
-	return &DispatchTool{name: name, desc: desc, build: build, obs: obs}
+// NewDispatchTool wires a worker builder up as a tool the orchestrator can
+// call. approve may be nil (no human gate); pass one to require the user to
+// review the worker's output before the orchestrator can build on it.
+func NewDispatchTool(name, desc string, build func() *agent.Agent, obs agent.Observer, approve agent.Approver) *DispatchTool {
+	return &DispatchTool{name: name, desc: desc, build: build, obs: obs, approve: approve}
 }

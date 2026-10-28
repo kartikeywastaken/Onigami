@@ -12,7 +12,6 @@ package agent
 import (
 	"context"
 	"fmt"
-
 	"onigami/internal/llm"
 )
 

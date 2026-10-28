@@ -5,8 +5,8 @@
 // The assembly reads top-down like the architecture we designed:
 //
 //	ORCHESTRATOR  (this agent — holds the plan, decides, delegates)
-//	  ├── dispatch_analyst      → spawns a fresh Analyst     (recon + CVE tools)
-//	  └── dispatch_exploit_dev  → spawns a fresh Exploit-Dev (no stub tools yet)
+//	  ├── dispatch_analyst      → fresh Analyst     (nmap/nikto/rustscan + CVE tools)
+//	  └── dispatch_exploit_dev  → fresh Exploit-Dev (writes a PoC; gated by the user)
 //
 // The orchestrator's "tools" are the two dispatchers. When it calls one, a
 // brand-new worker runs to completion and its report comes back as the tool
@@ -16,6 +16,8 @@ package orchestrator
 import (
 	"onigami/internal/agent"
 	"onigami/internal/llm"
+	"onigami/internal/scope"
+	"onigami/internal/tools"
 	"onigami/internal/workers"
 )
 
@@ -35,27 +37,33 @@ findings — brief the Exploit-Dev. When the objective is met, stop and write a
 final summary of what was found and demonstrated.`
 
 // New builds the orchestrator agent, fully wired to its workers and their
-// tools. client is the model everyone thinks with; obs receives live events
-// from every level so the UI (or stdout) can watch the whole run.
-func New(client llm.Client, model string, obs agent.Observer) *agent.Agent {
+// tools.
+//
+//   - client: the model everyone thinks with
+//   - sc:     the authorized scope; scan tools enforce it on every call
+//   - obs:    receives live events from every level (for stdout / the TUI)
+//   - approve: the human gate applied to the Exploit-Dev's output (proceed/hold)
+func New(client llm.Client, model string, sc *scope.Scope, obs agent.Observer, approve agent.Approver) *agent.Agent {
 	// Each worker type gets its own tool belt. Workers run one level deeper than
 	// the orchestrator (depth 1), so the UI can indent their activity.
 	const workerDepth = 1
 
-	// Real tools get wired in here next. Empty for now — the stub/fake tools
-	// were removed, so the Analyst currently reasons from its own knowledge
-	// until nmap/nikto/CVE-lookup tools are added.
-	analystTools := agent.NewToolSet()
+	// The Analyst gets the real recon + CVE tools (only the scanners that are
+	// actually installed), all bound to the scope. The Exploit-Dev has no tools:
+	// it reasons and writes a PoC, and the user gates whether to proceed with it.
+	analystTools := agent.NewToolSet(tools.AnalystTools(sc)...)
 	exploitTools := agent.NewToolSet()
 
 	// Wrap each worker builder as a dispatch tool. The closures capture the
 	// client/tools and build a FRESH worker on every call — nothing is reused
 	// between dispatches, which is what keeps workers ephemeral and stateless.
+	// Only the Exploit-Dev dispatch carries the human approval gate.
 	dispatchAnalyst := workers.NewDispatchTool(
 		"dispatch_analyst",
 		"Spawn a fresh Analyst to perform recon and vulnerability research. Provide a complete brief; it has no prior context.",
 		func() *agent.Agent { return workers.NewAnalyst(client, model, analystTools, workerDepth) },
 		obs,
+		nil, // no gate on research
 	)
 
 	dispatchExploitDev := workers.NewDispatchTool(
@@ -63,6 +71,7 @@ func New(client llm.Client, model string, obs agent.Observer) *agent.Agent {
 		"Spawn a fresh Exploit-Dev to produce a proof-of-concept for ONE confirmed finding. Provide a complete brief; it has no prior context.",
 		func() *agent.Agent { return workers.NewExploitDev(client, model, exploitTools, workerDepth) },
 		obs,
+		approve, // user reviews the PoC and chooses proceed/hold
 	)
 
 	return &agent.Agent{

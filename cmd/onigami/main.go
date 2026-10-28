@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -20,15 +21,17 @@ import (
 	"onigami/internal/config"
 	"onigami/internal/llm"
 	"onigami/internal/orchestrator"
+	"onigami/internal/scope"
+	"onigami/internal/tools"
 )
 
 func main() {
-	// Load .env from the project root (if present) before reading any config.
+	// loading env
 	if err := config.LoadDotenv(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: could not read .env:", err)
 	}
 
-	// A console observer: turns engine events into indented, labelled lines.
+	// converts thoughts in visible wors in the ui
 	obs := func(e agent.Event) {
 		indent := strings.Repeat("  ", e.Depth)
 		label := fmt.Sprintf("%-12s", e.Agent)
@@ -55,15 +58,32 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	orch := orchestrator.New(client, model, obs)
 
-	objective := "Assess host 10.0.0.5 for exploitable vulnerabilities and demonstrate one."
-	fmt.Printf("onigami — demo engagement (groq: %s)\n", model)
+	// The user MUST define the scope. Every scan tool enforces it; nothing is
+	// scanned outside it. (For a CTF, this is just the box's IP or range.)
+	sc, err := promptScope()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scope error:", err)
+		os.Exit(1)
+	}
+
+	// The proceed/hold gate the Exploit-Dev's output passes through.
+	approve := terminalApprover
+
+	orch := orchestrator.New(client, model, sc, obs, approve)
+
+	fmt.Printf("\nonigami — engagement (groq: %s)\n", model)
+	fmt.Printf("scope:    %s\n", sc)
+	fmt.Printf("scanners: %s\n", tools.ScannerStatus())
 	fmt.Println(strings.Repeat("─", 64))
+
+	objective := "Assess the in-scope target(s) for exploitable vulnerabilities and, if you confirm one, have the Exploit-Dev produce a proof-of-concept."
+	brief := fmt.Sprintf("%s\n\nIN-SCOPE TARGETS (authorized): %s\nStay strictly within this scope. Work in steps and delegate to your specialists.",
+		objective, sc)
 
 	report, err := orch.Run(context.Background(), agent.Task{
 		Objective: objective,
-		Brief:     objective + " Work in steps and delegate to your specialists.",
+		Brief:     brief,
 	}, obs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run failed:", err)
@@ -103,6 +123,46 @@ func mustCwd() string {
 		return wd
 	}
 	return "."
+}
+
+// stdin is a single shared reader for all interactive prompts. (Using separate
+// bufio.Readers on os.Stdin can swallow buffered input, so we keep just one.)
+var stdin = bufio.NewReader(os.Stdin)
+
+// promptScope gets the authorized scope from the user. It reads the SCOPE env
+// var if set, otherwise asks interactively. Scope is required — no default.
+func promptScope() (*scope.Scope, error) {
+	raw := os.Getenv("SCOPE")
+	if raw == "" {
+		fmt.Print("Enter engagement scope (IP, CIDR, or hostname — space/comma separated): ")
+		line, _ := stdin.ReadString('\n')
+		raw = strings.TrimSpace(line)
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("scope is required (nothing was entered)")
+	}
+	return scope.Parse(raw)
+}
+
+// terminalApprover is the proceed/hold gate. The worker's output has already
+// been printed above, so the user can read it, then type their decision.
+func terminalApprover(_ context.Context, role agent.Role, _ string) bool {
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 64))
+	fmt.Printf("⚠  The %s produced the output above (review it).\n", role)
+	fmt.Print("   Proceed with it, or hold? [proceed/hold]: ")
+
+	line, _ := stdin.ReadString('\n')
+	ans := strings.TrimSpace(strings.ToLower(line))
+
+	proceed := ans == "proceed" || ans == "p"
+	if proceed {
+		fmt.Println("   → proceeding.")
+	} else {
+		fmt.Println("   → holding; the engagement will stop here.")
+	}
+	fmt.Println(strings.Repeat("─", 64))
+	return proceed
 }
 
 // indentBlock indents every line of a multi-line string, for readable nesting.
