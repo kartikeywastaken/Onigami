@@ -1,16 +1,9 @@
-// Package orchestrator assembles the whole crew: the brain and the two workers
-// it can delegate to. This is the one place that knows how the pieces fit
-// together, so cmd/main stays tiny.
-//
-// The assembly reads top-down like the architecture we designed:
+
+// The assembly reads top-down like the architecture we designed: [ assembling all the components together]
 //
 //	ORCHESTRATOR  (this agent — holds the plan, decides, delegates)
 //	  ├── dispatch_analyst      → fresh Analyst     (nmap/nikto/rustscan + CVE tools)
 //	  └── dispatch_exploit_dev  → fresh Exploit-Dev (writes a PoC; gated by the user)
-//
-// The orchestrator's "tools" are the two dispatchers. When it calls one, a
-// brand-new worker runs to completion and its report comes back as the tool
-// result. One mechanism (the agent loop) at both levels.
 package orchestrator
 
 import (

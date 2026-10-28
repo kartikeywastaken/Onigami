@@ -1,13 +1,4 @@
-// Command onigami is the CLI entry point.
-//
-// It runs a single demo engagement against the real Groq API and prints the
-// live event stream to stdout, so you can see the orchestrator delegate to its
-// workers and the workers call their tools. The Bubble Tea TUI will replace
-// this plain printing next — but the engine underneath stays the same, because
-// it only speaks agent.Event.
-//
-// Configuration comes from the .env file at the project root (or real env
-// vars): GROQ_API_KEY is required; GROQ_MODEL optionally overrides the model.
+
 package main
 
 import (
@@ -95,10 +86,11 @@ func main() {
 	fmt.Println(report.Summary)
 }
 
-// defaultGroqModel is our pick for agentic tool-calling: Llama 3.3 70B has the
-// most reliable function-calling support on Groq's free tier. Override it with
-// the GROQ_MODEL env var (e.g. "openai/gpt-oss-120b" for stronger planning).
-const defaultGroqModel = "llama-3.3-70b-versatile"
+// defaultGroqModel is our pick for agentic tool-calling. gpt-oss-120b has
+// strong reasoning + reliable function calling and is available on this key.
+// Override it with the GROQ_MODEL env var (e.g. "openai/gpt-oss-20b" for speed,
+// or "qwen/qwen3.8-27b").
+const defaultGroqModel = "openai/gpt-oss-120b"
 
 // buildClient constructs the real Groq client from configuration. It returns an
 // error (rather than falling back to anything) if the API key is missing.
