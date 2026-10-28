@@ -161,6 +161,9 @@ func AnalystTools(sc *scope.Scope) []agent.Tool {
 	if installed("nikto") {
 		ts = append(ts, Nikto{sc})
 	}
+	// http_request needs no external binary — it's always available, and it's
+	// what lets the Analyst read real pages instead of imagining them.
+	ts = append(ts, NewHTTPRequest(sc))
 	ts = append(ts, CVESearch{}, CVEDetail{})
 	return ts
 }

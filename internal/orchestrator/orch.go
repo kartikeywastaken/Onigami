@@ -48,20 +48,20 @@ func New(cfg Config) *agent.Agent {
 	// the orchestrator (depth 1), so the UI can indent their activity.
 	const workerDepth = 1
 
-	// The Analyst gets the real recon + CVE tools (only the scanners that are
-	// actually installed), all bound to the scope. The Exploit-Dev has no tools:
-	// it reasons and writes a PoC, and the user gates whether to proceed with it.
-	analystTools := agent.NewToolSet(tools.AnalystTools(cfg.Scope)...)
-	exploitTools := agent.NewToolSet()
-
 	// Wrap each worker builder as a dispatch tool. The closures build a FRESH
-	// worker on every call — nothing is reused between dispatches, which is what
-	// keeps workers ephemeral and stateless. Each worker uses its own client.
+	// worker — AND a fresh tool set — on every call. Building the tools per
+	// spawn matters: it gives each Analyst its own HTTP cookie jar, so sessions
+	// never leak between workers. That's what keeps workers truly stateless.
 	// Only the Exploit-Dev dispatch carries the human approval gate.
 	dispatchAnalyst := workers.NewDispatchTool(
 		"dispatch_analyst",
 		"Spawn a fresh Analyst to perform recon and vulnerability research. Provide a complete brief; it has no prior context.",
-		func() *agent.Agent { return workers.NewAnalyst(cfg.Analyst, cfg.Model, analystTools, workerDepth) },
+		func() *agent.Agent {
+			// The Analyst gets the real recon + CVE + http tools (only scanners
+			// that are installed), all bound to the scope.
+			tb := agent.NewToolSet(tools.AnalystTools(cfg.Scope)...)
+			return workers.NewAnalyst(cfg.Analyst, cfg.Model, tb, workerDepth)
+		},
 		cfg.Observer,
 		nil, // no gate on research
 	)
@@ -70,7 +70,8 @@ func New(cfg Config) *agent.Agent {
 		"dispatch_exploit_dev",
 		"Spawn a fresh Exploit-Dev to produce a proof-of-concept for ONE confirmed finding. Provide a complete brief; it has no prior context.",
 		func() *agent.Agent {
-			return workers.NewExploitDev(cfg.ExploitDev, cfg.Model, exploitTools, workerDepth)
+			// No tools: it reasons and writes a PoC; the user gates whether to proceed.
+			return workers.NewExploitDev(cfg.ExploitDev, cfg.Model, agent.NewToolSet(), workerDepth)
 		},
 		cfg.Observer,
 		cfg.Approver, // user reviews the PoC and chooses proceed/hold
