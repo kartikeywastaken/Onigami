@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"onigami/internal/config"
 )
 
 // Groq is a real llm.Client backed by Groq's API.
@@ -31,16 +33,29 @@ type Groq struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+
+	// Resilience knobs. A model call can fail two ways that are worth retrying:
+	// the server pushes back (HTTP 429 / 5xx) or the network blips (DNS failure,
+	// connection reset, timeout). Both are transient, so we retry with backoff
+	// instead of letting one hiccup kill a whole engagement. Tunable via env.
+	maxAttempts int           // total tries before giving up
+	retryBase   time.Duration // base delay for exponential backoff (net errors / 5xx)
 }
 
 // NewGroq builds a Groq client. The API key should come from the environment
 // (GROQ_API_KEY), not hard-coded — see main.go.
+//
+// Operators can tune resilience without touching code:
+//   - GROQ_MAX_RETRIES    total attempts per call   (default 6)
+//   - GROQ_RETRY_BASE      base backoff in seconds   (default 1)
+//   - GROQ_HTTP_TIMEOUT    per-attempt timeout, secs (default 120)
 func NewGroq(apiKey string) *Groq {
 	return &Groq{
-		apiKey:  apiKey,
-		baseURL: "https://api.groq.com/openai/v1",
-		// Generous timeout: agent turns with big contexts can take a while.
-		http: &http.Client{Timeout: 120 * time.Second},
+		apiKey:      apiKey,
+		baseURL:     "https://api.groq.com/openai/v1",
+		http:        &http.Client{Timeout: config.SecondsEnv("GROQ_HTTP_TIMEOUT", 120*time.Second)},
+		maxAttempts: config.IntEnv("GROQ_MAX_RETRIES", 6),
+		retryBase:   config.SecondsEnv("GROQ_RETRY_BASE", 1*time.Second),
 	}
 }
 
@@ -120,23 +135,49 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("encode request: %w", err)
 	}
 
-	const maxAttempts = 6
 	for attempt := 1; ; attempt++ {
 		respBytes, status, headers, err := g.send(ctx, raw)
-		if err != nil {
-			return Response{}, err
-		}
 
-		if status == http.StatusTooManyRequests && attempt < maxAttempts {
-			wait := parseRetryAfter(headers, string(respBytes))
-			fmt.Fprintf(os.Stderr, "[groq] rate limited; waiting %s then retrying (%d/%d)\n",
-				wait.Round(time.Second), attempt, maxAttempts)
-			select {
-			case <-time.After(wait):
-				continue
-			case <-ctx.Done():
+		// Network-level failure (DNS lookup, connection reset, timeout). These
+		// are transient, so we retry with exponential backoff instead of letting
+		// one blip kill the engagement — UNLESS the context was cancelled, in
+		// which case the "failure" is us shutting down, not the network.
+		if err != nil {
+			if ctx.Err() != nil {
 				return Response{}, ctx.Err()
 			}
+			if attempt >= g.maxAttempts {
+				return Response{}, fmt.Errorf("groq request failed after %d attempts: %w", attempt, err)
+			}
+			wait := g.backoff(attempt)
+			fmt.Fprintf(os.Stderr, "[groq] network error (%v); waiting %s then retrying (%d/%d)\n",
+				err, wait.Round(time.Second), attempt, g.maxAttempts)
+			if !sleepCtx(ctx, wait) {
+				return Response{}, ctx.Err()
+			}
+			continue
+		}
+
+		// Rate limited: respect the server's Retry-After.
+		if status == http.StatusTooManyRequests && attempt < g.maxAttempts {
+			wait := parseRetryAfter(headers, string(respBytes))
+			fmt.Fprintf(os.Stderr, "[groq] rate limited; waiting %s then retrying (%d/%d)\n",
+				wait.Round(time.Second), attempt, g.maxAttempts)
+			if !sleepCtx(ctx, wait) {
+				return Response{}, ctx.Err()
+			}
+			continue
+		}
+
+		// Transient server error (5xx): back off and retry.
+		if status >= 500 && status <= 599 && attempt < g.maxAttempts {
+			wait := g.backoff(attempt)
+			fmt.Fprintf(os.Stderr, "[groq] server error %d; waiting %s then retrying (%d/%d)\n",
+				status, wait.Round(time.Second), attempt, g.maxAttempts)
+			if !sleepCtx(ctx, wait) {
+				return Response{}, ctx.Err()
+			}
+			continue
 		}
 
 		if status != http.StatusOK {
@@ -296,6 +337,33 @@ func fromGroqChoice(m groqMessage, finish string) Response {
 func isReasoningModel(model string) bool {
 	m := strings.ToLower(model)
 	return strings.Contains(m, "gpt-oss") || strings.Contains(m, "qwen3")
+}
+
+// backoff is the delay before retrying a network or 5xx failure: an exponential
+// ramp of retryBase * 2^(attempt-1), capped so we never wait absurdly long.
+// (429s don't use this — they follow the server's Retry-After instead.)
+func (g *Groq) backoff(attempt int) time.Duration {
+	const maxWait = 90 * time.Second
+	exp := attempt - 1
+	if exp < 0 || exp > 20 { // guard against shift overflow on odd configs
+		return maxWait
+	}
+	d := g.retryBase << exp
+	if d <= 0 || d > maxWait {
+		return maxWait
+	}
+	return d
+}
+
+// sleepCtx waits for d, returning true normally and false if the context is
+// cancelled first (so the caller can abort instead of retrying).
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // retryMsgRe pulls the "try again in 23.9s" hint out of a 429 body.

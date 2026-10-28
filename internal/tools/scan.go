@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"time"
@@ -11,6 +13,29 @@ import (
 	"onigami/internal/agent"
 	"onigami/internal/scope"
 )
+
+// defaultNmapPorts is a curated set of high-value ports spanning web, databases,
+// remote access, mail, and common services. We scan these explicitly instead of
+// --top-ports: measured against real firewalled hosts, an explicit list is both
+// faster under -sV and more accurate (no false-positives, never misses 80/443).
+const defaultNmapPorts = "21,22,23,25,53,80,110,111,135,139,143,389,443,445,587,993,995,1433,1521,1720,2049,3306,3389,5060,5432,5900,6379,8000,8080,8081,8443,8888,9000,9200,11211,27017"
+
+// nmapPrivilege reports whether nmap can run a privileged SYN scan: directly if
+// we're already root, or via sudo if main.go primed it (ONIGAMI_NMAP_PRIVILEGED)
+// and the sudo credential is still valid. useSudo is true only in the latter
+// case (we must prefix the command with sudo); privileged covers both.
+func nmapPrivilege() (useSudo, privileged bool) {
+	if os.Geteuid() == 0 {
+		return false, true
+	}
+	if os.Getenv("ONIGAMI_NMAP_PRIVILEGED") == "1" {
+		// Confirm the sudo timestamp is still warm; otherwise fall back quietly.
+		if exec.Command("sudo", "-n", "true").Run() == nil {
+			return true, true
+		}
+	}
+	return false, false
+}
 
 // portsRe validates an nmap-style port spec: "-", or numbers/ranges/lists like
 // "80", "1-1000", "22,80,443". This keeps the model from sneaking anything else
@@ -61,17 +86,43 @@ func (n Nmap) Run(ctx context.Context, input json.RawMessage) (string, error) {
 		return "", err
 	}
 
-	// -sV: version detection, -T4: faster timing, -Pn: skip host discovery
-	// (common for CTF boxes that drop pings).
-	args := []string{"-sV", "-T4", "-Pn"}
+	// Flag choices come from measured behaviour against real, firewalled hosts:
+	//  - An explicit curated port list beats --top-ports: the latter both times
+	//    out under -sV and returns firewall false-positives while MISSING 80/443.
+	//  - -n (no DNS), --max-retries 2, --version-intensity 2 keep it fast.
+	//  - -Pn: skip host discovery (many hosts drop pings).
+	//  - --host-timeout bounds a stubborn host instead of hanging.
+	args := []string{"-Pn", "-n", "-T4", "--max-retries", "2", "--host-timeout", "150s"}
+
+	// SYN scan (-sS) is faster and far more accurate than the unprivileged
+	// connect scan, but it needs root. Use it when we're root or sudo is primed
+	// (see main.go); otherwise fall back silently to the connect scan.
+	useSudo, privileged := nmapPrivilege()
+	if privileged {
+		args = append(args, "-sS")
+	}
+	args = append(args, "-sV", "--version-intensity", "2")
+
 	if in.Ports != "" {
 		if !portsRe.MatchString(in.Ports) {
 			return "", fmt.Errorf("invalid ports spec %q", in.Ports)
 		}
 		args = append(args, "-p", in.Ports)
+	} else {
+		args = append(args, "-p", defaultNmapPorts)
 	}
 	args = append(args, in.Target)
-	return runCommand(ctx, 240*time.Second, "nmap", args...)
+
+	// sudo needs nmap's absolute path (its secure_path rarely includes
+	// /opt/homebrew/bin) and the -n flag so it never blocks on a prompt.
+	name, runArgs := "nmap", args
+	if useSudo {
+		if p, err := exec.LookPath("nmap"); err == nil {
+			name = "sudo"
+			runArgs = append([]string{"-n", p}, args...)
+		}
+	}
+	return runCommand(ctx, 180*time.Second, name, runArgs...)
 }
 
 // --- nikto ----------------------------------------------------------------
@@ -161,10 +212,13 @@ func AnalystTools(sc *scope.Scope) []agent.Tool {
 	if installed("nikto") {
 		ts = append(ts, Nikto{sc})
 	}
-	// http_request needs no external binary — it's always available, and it's
-	// what lets the Analyst read real pages instead of imagining them.
+	// http_request and tcp_probe need no external binary — they're always
+	// available. http_request reads real pages (instead of imagining them);
+	// tcp_probe grabs raw banners from non-HTTP ports (the safe nc stand-in).
 	ts = append(ts, NewHTTPRequest(sc))
+	ts = append(ts, NewTCPProbe(sc))
 	ts = append(ts, CVESearch{}, CVEDetail{})
+	ts = append(ts, NotebookTools()...) // working memory: record_finding / list_findings
 	return ts
 }
 

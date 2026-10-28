@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"onigami/internal/agent"
 	"onigami/internal/config"
@@ -64,20 +66,61 @@ func main() {
 	// per account, not per key). Missing keys fall back to the main one.
 	analystClient := clientFromEnv("GROQ_API_KEY_ANALYST", orchClient)
 	exploitClient := clientFromEnv("GROQ_API_KEY_EXPLOIT", orchClient)
+	// The Web-Tester reuses the Analyst's key unless given its own.
+	webTesterClient := clientFromEnv("GROQ_API_KEY_WEBTESTER", analystClient)
+
+	// Per-agent models. Groq's rate limits are per-model-per-org, so we split the
+	// crew across two model buckets by default: the low-volume brain and
+	// exploitation workers stay on the base model; the high-volume recon/testing
+	// workers run on the smaller model, drawing on an independent budget. Each is
+	// overridable with its own env var.
+	orchModel := modelEnv("GROQ_MODEL_ORCH", model)
+	analystModel := modelEnv("GROQ_MODEL_ANALYST", smallGroqModel)
+	webTesterModel := modelEnv("GROQ_MODEL_WEBTESTER", smallGroqModel)
+	exploitDevModel := modelEnv("GROQ_MODEL_EXPLOIT", model)
+	exploiterModel := modelEnv("GROQ_MODEL_EXPLOITER", model)
+
+	// Prime sudo so nmap can run fast, accurate SYN scans (-sS needs root).
+	// This asks for your password ONCE, here in the terminal; only nmap is
+	// elevated, the agent itself stays unprivileged. Skip with ONIGAMI_NMAP_SUDO=0.
+	primeNmapSudo()
+
+	// Metasploit plumbing for the Exploiter. The manager starts msfrpcd lazily
+	// (only if the exploiter is actually used) and must be shut down on exit.
+	audit := tools.NewAuditLog()
+	msfMgr := tools.NewMSFManager()
+	defer msfMgr.Shutdown()
 
 	orch := orchestrator.New(orchestrator.Config{
 		Orchestrator: orchClient,
 		Analyst:      analystClient,
+		WebTester:    webTesterClient,
 		ExploitDev:   exploitClient,
-		Model:        model,
-		Scope:        sc,
-		Observer:     obs,
-		Approver:     terminalApprover, // proceed/hold gate on the PoC
+		Exploiter:    exploitClient, // reuses the exploit key unless you split it
+		MSF:          msfMgr,
+		Audit:        audit,
+
+		OrchestratorModel: orchModel,
+		AnalystModel:      analystModel,
+		WebTesterModel:    webTesterModel,
+		ExploitDevModel:   exploitDevModel,
+		ExploiterModel:    exploiterModel,
+
+		Scope:    sc,
+		Observer: obs,
+		Approver: terminalApprover, // proceed/hold gate on the PoC and each MSF run
 	})
 
-	fmt.Printf("\nonigami — engagement (groq: %s)\n", model)
+	fmt.Printf("\nonigami — engagement\n")
+	fmt.Printf("models:   orch=%s  analyst=%s  web=%s  exploit=%s  exploiter=%s\n",
+		orchModel, analystModel, webTesterModel, exploitDevModel, exploiterModel)
 	fmt.Printf("scope:    %s\n", sc)
 	fmt.Printf("scanners: %s\n", tools.ScannerStatus())
+	fmt.Printf("web:      %s\n", tools.WebTesterStatus())
+	fmt.Printf("exploit:  %s\n", tools.MSFStatus(msfMgr))
+	if msfMgr.Available() {
+		fmt.Printf("audit:    %s\n", audit.Path())
+	}
 	fmt.Printf("keys:     %s\n", keyStatus())
 	fmt.Println(strings.Repeat("─", 64))
 
@@ -104,6 +147,49 @@ func main() {
 // Override it with the GROQ_MODEL env var (e.g. "openai/gpt-oss-20b" for speed,
 // or "qwen/qwen3.8-27b").
 const defaultGroqModel = "openai/gpt-oss-120b"
+
+// smallGroqModel is the default for the high-volume recon/testing workers, so
+// they draw on a different per-model rate-limit bucket than the orchestrator.
+const smallGroqModel = "openai/gpt-oss-20b"
+
+// primeNmapSudo asks for the sudo password once up front (in this terminal) and,
+// on success, sets ONIGAMI_NMAP_PRIVILEGED so the nmap tool uses sudo SYN scans.
+// It's a no-op if we're already root, sudo is missing, or ONIGAMI_NMAP_SUDO=0.
+func primeNmapSudo() {
+	if os.Getenv("ONIGAMI_NMAP_SUDO") == "0" || os.Geteuid() == 0 {
+		return
+	}
+	if _, err := exec.LookPath("sudo"); err != nil {
+		return
+	}
+	if _, err := exec.LookPath("nmap"); err != nil {
+		return // no nmap, no point
+	}
+	fmt.Println("Priming sudo for faster nmap SYN scans (enter your password; or set ONIGAMI_NMAP_SUDO=0 to skip).")
+	cmd := exec.Command("sudo", "-v")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "  → sudo not primed; nmap will run unprivileged (slower, less accurate).")
+		return
+	}
+	os.Setenv("ONIGAMI_NMAP_PRIVILEGED", "1")
+	// Keep the sudo credential warm for the length of the engagement so scans
+	// late in the run don't silently drop back to unprivileged.
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+			_ = exec.Command("sudo", "-n", "-v").Run()
+		}
+	}()
+}
+
+// modelEnv returns the model id from env var `name`, or `def` if it's unset.
+func modelEnv(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
+}
 
 // buildClient constructs the real Groq client from configuration. It returns an
 // error (rather than falling back to anything) if the API key is missing.

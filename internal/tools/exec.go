@@ -22,7 +22,7 @@ import (
 // maxOutput caps how much tool output we feed back to the model, so a chatty
 // scanner can't blow out the context window — and, on a low tokens-per-minute
 // tier, can't burn the whole budget in one tool result.
-const maxOutput = 4000
+const maxOutput = 2500
 
 // runCommand executes name with args, bounded by timeout, and returns the
 // combined stdout+stderr. Scanners often exit non-zero yet still produce useful

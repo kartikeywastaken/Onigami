@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"onigami/internal/config"
 	"onigami/internal/scope"
 )
 
@@ -36,8 +38,11 @@ func NewHTTPRequest(sc *scope.Scope) *HTTPRequest {
 	return &HTTPRequest{
 		scope: sc,
 		client: &http.Client{
-			Jar:     jar,
-			Timeout: 30 * time.Second,
+			Jar: jar,
+			// Fail fast on an unreachable host: a short timeout means a dead
+			// target costs seconds, not half a minute, per attempt. Tune with
+			// ONIGAMI_HTTP_TIMEOUT (seconds) if a slow-but-live target needs more.
+			Timeout: config.SecondsEnv("ONIGAMI_HTTP_TIMEOUT", 10*time.Second),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("stopped after 10 redirects")
@@ -46,6 +51,13 @@ func NewHTTPRequest(sc *scope.Scope) *HTTPRequest {
 					return fmt.Errorf("redirect to out-of-scope host %q blocked", req.URL.Hostname())
 				}
 				return nil
+			},
+			// A security-testing client must not reject targets for bad/expired/
+			// self-signed TLS certs — those are the norm on test and internal hosts
+			// (demo.testfire.net's cert was expired and blocked every HTTPS fetch).
+			// Scope is still enforced on the host, so this only relaxes cert trust.
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // intentional for pentest targets
 			},
 		},
 	}
