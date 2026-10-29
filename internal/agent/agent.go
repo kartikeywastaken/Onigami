@@ -103,6 +103,17 @@ type Agent struct {
 	// again. 0 means "use the default". This stops a confused model from, say,
 	// re-running the identical nmap scan a dozen times.
 	MaxIdenticalCalls int
+
+	// RequireToolUse turns on the REFLECTOR guard (borrowed from PentAGI's
+	// Reflector agent). When true, an agent that tries to finish with a report
+	// WITHOUT ever having run a tool is bounced back with a pointed nudge:
+	// findings must come from a tool, not from prose. This is the project's
+	// defense against a weak model NARRATING fake tool output ("I ran sqlmap and
+	// confirmed SQLi…") instead of actually calling the tool. Set it on the
+	// recon/active-testing roles, whose job is meaningless without real tool
+	// output; leave it off for roles that legitimately only write (e.g. the
+	// exploit-dev, which reasons a PoC in prose).
+	RequireToolUse bool
 }
 
 // Budget knobs for staying under a tight tokens-per-minute tier (Groq free tier
@@ -167,6 +178,12 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 	// text at all — which would otherwise yield an empty report.
 	reportNudges := 0
 
+	// toolCallsMade counts how many tool calls this run has actually executed,
+	// and reflectNudges bounds how many times the REFLECTOR guard may bounce a
+	// no-tool report back (see RequireToolUse).
+	toolCallsMade := 0
+	reflectNudges := 0
+
 	for turn := 0; turn < a.MaxTurns; turn++ {
 		// Respect cancellation (e.g. the user quits the TUI mid-run).
 		if err := ctx.Err(); err != nil {
@@ -205,6 +222,21 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 		// text is the final report.
 		if resp.StopReason != llm.StopToolUse {
 			text := resp.Message.Text()
+
+			// REFLECTOR guard (PentAGI's Reflector, ported): a tool-grounded role
+			// must not finish having run NO tool at all — that is the signature of a
+			// model narrating fake tool output instead of calling the tool. Bounce it
+			// back a bounded number of times, pointing it at the real tools. We only
+			// do this when the agent HAS tools and is flagged RequireToolUse, so
+			// prose-only roles (exploit-dev) are never penalised.
+			if a.RequireToolUse && toolCallsMade == 0 && len(a.Tools.Definitions()) > 0 && reflectNudges < 2 {
+				reflectNudges++
+				obs.emit(Event{Agent: a.Role, Kind: EventError,
+					Text:  "finished without running any tool — findings must come from a tool, not prose; nudging it to actually run one",
+					Depth: a.Depth})
+				msgs = append(msgs, llm.UserText("You ended without running a single tool. In this engagement a finding only counts if a TOOL produced it — you may not assert results you did not obtain from a tool. Call the appropriate tool now against the in-scope target. If you have genuinely established there is nothing to run, say so explicitly and state that no tool confirmed a finding."))
+				continue
+			}
 
 			// Empty final answer. This happens when the model poured the whole
 			// turn into its reasoning channel, or hit the length limit mid-thought
@@ -261,6 +293,7 @@ func (a *Agent) Run(ctx context.Context, task Task, obs Observer) (Report, error
 			}
 
 			result := a.Tools.Run(ctx, call)
+			toolCallsMade++
 
 			obs.emit(Event{Agent: a.Role, Kind: EventToolResult,
 				Text:  fmt.Sprintf("%s → %s", call.ToolName, truncate(result.ToolResult, 120)),

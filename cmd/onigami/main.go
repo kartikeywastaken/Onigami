@@ -23,7 +23,7 @@ func main() {
 	// --tui opts into the terminal dashboard; by default we keep the plain line
 	// printer, which stays clean when piped/teed to a log file.
 	tuiFlag := flag.Bool("tui", false, "show the live terminal dashboard instead of plain line output")
-	missionFlag := flag.String("mission", "", "the engagement objective the crew works toward (also ONIGAMI_MISSION; prompted if unset)")
+	missionFlag := flag.String("mission", "", "the engagement objective the crew works toward (also ONIGAMI_MISSION; REQUIRED — prompted if unset)")
 	llmOrchFlag := flag.Bool("llm-orch", false, "drive the engagement with the free-form LLM orchestrator instead of the structured stage pipeline (default)")
 	flag.Parse()
 
@@ -85,7 +85,11 @@ func main() {
 	// overridable with its own env var.
 	orchModel := modelEnv("GROQ_MODEL_ORCH", model)
 	analystModel := modelEnv("GROQ_MODEL_ANALYST", smallGroqModel)
-	webTesterModel := modelEnv("GROQ_MODEL_WEBTESTER", smallGroqModel)
+	// The web-tester defaults to the LARGER model: active OWASP testing lives or
+	// dies on the model actually EMITTING tool calls (sqlmap/nuclei/ffuf), and the
+	// small model narrates fake results far more often. Override for speed/budget
+	// with GROQ_MODEL_WEBTESTER=openai/gpt-oss-20b.
+	webTesterModel := modelEnv("GROQ_MODEL_WEBTESTER", model)
 	exploitDevModel := modelEnv("GROQ_MODEL_EXPLOIT", model)
 	exploiterModel := modelEnv("GROQ_MODEL_EXPLOITER", model)
 
@@ -132,10 +136,14 @@ func main() {
 		}
 	}
 
-	// The mission is the operator's objective — what the crew should achieve.
-	// Supplied via --mission, the ONIGAMI_MISSION env var, or an interactive
-	// prompt; a blank mission falls back to the generic default inside the driver.
-	mission := resolveMission(*missionFlag)
+	// The mission is the operator's objective — what the crew should achieve. It
+	// is MANDATORY: supplied via --mission, the ONIGAMI_MISSION env var, or an
+	// interactive prompt. With no mission the run does not start.
+	mission, err := resolveMission(*missionFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mission error:", err)
+		os.Exit(1)
+	}
 
 	// drive runs one engagement with the given observer/approver and returns its
 	// summary. By default it's the structured stage pipeline (recon → web →
@@ -337,20 +345,30 @@ func promptScope() (*scope.Scope, error) {
 	return scope.Parse(raw)
 }
 
-// resolveMission figures out the engagement objective, in priority order:
-// the --mission flag, then the ONIGAMI_MISSION env var, then an interactive
-// prompt. A blank result is fine — the driver falls back to a generic default.
-func resolveMission(flagVal string) string {
+// resolveMission figures out the engagement objective, in priority order: the
+// --mission flag, then the ONIGAMI_MISSION env var, then an interactive prompt.
+// A mission is MANDATORY: if none is supplied and the operator enters nothing
+// (or stdin is not interactive), it returns an error and the run must not start.
+func resolveMission(flagVal string) (string, error) {
 	if m := strings.TrimSpace(flagVal); m != "" {
-		return m
+		return m, nil
 	}
 	if m := strings.TrimSpace(os.Getenv("ONIGAMI_MISSION")); m != "" {
-		return m
+		return m, nil
 	}
 	fmt.Println("What should this engagement achieve? (the mission the crew works toward)")
-	fmt.Print("Mission [blank = assess for any exploitable vulnerability]: ")
-	line, _ := stdin.ReadString('\n')
-	return strings.TrimSpace(line)
+	for attempts := 0; attempts < 3; attempts++ {
+		fmt.Print("Mission (required): ")
+		line, err := stdin.ReadString('\n')
+		if m := strings.TrimSpace(line); m != "" {
+			return m, nil
+		}
+		if err != nil {
+			break // EOF / closed stdin (e.g. piped input with no mission): can't prompt
+		}
+		fmt.Println("A mission is required — tell the crew what to achieve.")
+	}
+	return "", fmt.Errorf(`no mission given: pass --mission "…", set ONIGAMI_MISSION, or enter one when prompted`)
 }
 
 // driverName labels which engagement driver is in use, for the startup banner.

@@ -169,7 +169,7 @@ func (p *Pipeline) Run(ctx context.Context) (string, error) {
 	for i, c := range candidates {
 		p.emit(agent.EventMessage, fmt.Sprintf("exploit-dev target %d/%d: %s", i+1, len(candidates), oneLine(c.Summary, 120)))
 		poc, proceed, derr := p.runWorker(ctx,
-			workers.NewExploitDev(p.cfg.ExploitDev, p.exploitDevModel, agent.NewToolSet(), workerDepth),
+			workers.NewExploitDev(p.cfg.ExploitDev, p.exploitDevModel, p.exploitDevTools(), workerDepth),
 			p.exploitDevBrief(c), p.cfg.Approver)
 		if derr != nil {
 			p.emit(agent.EventError, "exploit-dev failed for this finding, moving on: "+derr.Error())
@@ -203,6 +203,19 @@ func (p *Pipeline) Run(ctx context.Context) (string, error) {
 
 	p.emit(agent.EventReport, "structured engagement complete")
 	return p.assemble(sections), nil
+}
+
+// exploitDevTools builds the exploit-dev's tool belt. It is prose-first (it
+// reasons a PoC in writing), but when Metasploit is wired up it also gets the
+// READ-ONLY module-grounding tools so a PoC can cite a real module, its real
+// options, and the versions it actually affects — instead of an invented one.
+// It never gets a tool that runs or checks a module; that stays with the gated
+// exploiter (Stage 5).
+func (p *Pipeline) exploitDevTools() *agent.ToolSet {
+	if p.cfg.MSF != nil && p.cfg.MSF.Available() {
+		return agent.NewToolSet(tools.MSFGroundingTools(p.cfg.MSF)...)
+	}
+	return agent.NewToolSet()
 }
 
 // --- stage helpers --------------------------------------------------------
@@ -262,9 +275,11 @@ and recorded what it found — here is a digest:
 
 %s
 
-Orient from the shared notebook FIRST (list_findings), then follow your fixed
-phase order. Confirm real, exploitable web issues with evidence; those
-confirmed findings are what the next stage will build a proof-of-concept from.`,
+Orient from the shared notebook FIRST (list_findings), then call web_sweep ONCE
+to run the mechanical nuclei+ffuf+sqlmap pass — it records verified findings for
+you. Follow up by hand only where it left a concrete gap. The verified findings
+are what the next stage will build a proof-of-concept from; do not assert any
+issue a tool did not actually confirm.`,
 		p.mission, p.scopeLine(), p.findingsDigest(24))
 }
 
@@ -287,6 +302,10 @@ GROUNDING RULES (important):
   guessing.
 - If the finding is a CVE record, state the version precondition plainly: the
   PoC applies IF the target runs the affected version.
+- If msf_search / msf_module_info are available and this is a CVE or versioned
+  service, ground the PoC in a REAL Metasploit module: search, read its real
+  options and affected versions, and cite them. These are read-only — do not run
+  or check a module. If nothing matches, say so and write a manual PoC instead.
 - Explain what the PoC does, its preconditions, and how a defender detects or
   remediates it. Keep it scoped to this one finding.`,
 		p.mission, p.scopeLine(), strings.TrimSpace(c.Summary), orDash(c.Evidence))

@@ -336,18 +336,24 @@ func (m *model) renderActivity() {
 
 func (m model) View() tea.View {
 	if !m.ready {
-		return tea.NewView("")
+		// Set the green ground from the very first frame, before any content, so the
+		// dashboard "loads onto" the tint rather than painting it over black.
+		v := tea.NewView("")
+		v.BackgroundColor = m.styles.bg
+		return v
 	}
 	if m.width < 60 || m.height < 16 {
 		box := m.styles.errText.Render("terminal too small — need at least 60×16")
 		v := tea.NewView(m.styles.app.Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceStyle(m.styles.app))))
 		v.AltScreen = true
+		v.BackgroundColor = m.styles.bg
 		return v
 	}
 	if m.pending != nil {
 		v := tea.NewView(m.modalView())
 		v.AltScreen = true
 		v.WindowTitle = "onigami — approval"
+		v.BackgroundColor = m.styles.bg
 		return v
 	}
 
@@ -359,11 +365,13 @@ func (m model) View() tea.View {
 	findPane := m.renderPane(fmt.Sprintf("FINDINGS (%d)", m.findingsCount), m.findings.View(), m.width, m.findingsH, m.focus == paneFindings)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, m.headerView(), top, findPane, m.footerView())
-	// Paint the whole frame on the green ground so any cells the panes don't
-	// cover still carry the tint rather than the terminal default.
+	// The green ground is the terminal's OWN background (BackgroundColor below),
+	// set once as a back layer — so streaming output never overwrites the tint and
+	// leaves black gaps. The app wrapper keeps the composed frame on the same tint.
 	v := tea.NewView(m.styles.app.Width(m.width).Height(m.height).Render(content))
 	v.AltScreen = true
 	v.WindowTitle = "onigami"
+	v.BackgroundColor = m.styles.bg
 	return v
 }
 

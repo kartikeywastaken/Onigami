@@ -292,6 +292,13 @@ func (t TestSSL) Run(ctx context.Context, input json.RawMessage) (string, error)
 // bound to the scope.
 func WebTesterTools(sc *scope.Scope, findings *FindingsStore) []agent.Tool {
 	var ts []agent.Tool
+	// web_sweep runs the whole mechanical web-testing pass (nuclei + ffuf +
+	// sqlmap) in one coded call and records verified findings — the primary entry
+	// point; the individual scanners below remain for targeted follow-up. Offered
+	// whenever any of the scanners it drives is present.
+	if installed("nuclei") || installed("ffuf") || installed("sqlmap") {
+		ts = append(ts, NewWebSweep(sc, findings))
+	}
 	if installed("sqlmap") {
 		ts = append(ts, SQLMap{sc})
 	}

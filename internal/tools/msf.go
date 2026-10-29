@@ -440,6 +440,19 @@ func ExploiterTools(mgr *MSFManager, sc *scope.Scope, approve agent.Approver, au
 	}
 }
 
+// MSFGroundingTools returns ONLY the read-only Metasploit tools (module search
+// and module info). They query the local msfrpcd for real module names,
+// options, and affected-version data, but can never run or check a module — so
+// they are safe to hand to the exploit-dev, whose PoCs should cite a REAL
+// Metasploit module instead of an invented one. Actually firing a module stays
+// with the gated, scope-checked exploiter (ExploiterTools / MSFRun).
+func MSFGroundingTools(mgr *MSFManager) []agent.Tool {
+	return []agent.Tool{
+		MSFSearch{mgr},
+		MSFModuleInfo{mgr},
+	}
+}
+
 // MSFStatus reports whether Metasploit is wired up, for the startup banner.
 func MSFStatus(mgr *MSFManager) string {
 	if mgr.Available() {

@@ -24,6 +24,15 @@ func IntEnv(name string, def int) int {
 	return def
 }
 
+// StringEnv returns the trimmed value of env var `name`, or `def` if it is unset
+// or blank.
+func StringEnv(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
+}
+
 // FloatEnv returns the float value of env var `name`, or `def` if unset, blank,
 // or not a non-negative number. Used for e.g. the model sampling temperature.
 func FloatEnv(name string, def float64) float64 {
