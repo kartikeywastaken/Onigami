@@ -705,12 +705,13 @@ func (m model) formatEvent(e agent.Event, width int) string {
 
 // --- small helpers -----------------------------------------------------------
 
-// asciiLogo is the onigami wordmark on the landing screen.
-const asciiLogo = `   ____  _   _ _____ _____    _    __  __ ___
-  / __ \| \ | |_   _/ ____|  / \  |  \/  |_ _|
- | |  | |  \| | | || |  _   / _ \ | |\/| || |
- | |__| | |\  | | || |_| | / ___ \| |  | || |
-  \____/|_| \_| |_| \____|/_/   \_\_|  |_|___|`
+// asciiLogo is the onigami wordmark on the landing screen (figlet "ANSI Shadow").
+const asciiLogo = ` ██████╗ ███╗   ██╗██╗ ██████╗  █████╗ ███╗   ███╗██╗
+██╔═══██╗████╗  ██║██║██╔════╝ ██╔══██╗████╗ ████║██║
+██║   ██║██╔██╗ ██║██║██║  ███╗███████║██╔████╔██║██║
+██║   ██║██║╚██╗██║██║██║   ██║██╔══██║██║╚██╔╝██║██║
+╚██████╔╝██║ ╚████║██║╚██████╔╝██║  ██║██║ ╚═╝ ██║██║
+ ╚═════╝ ╚═╝  ╚═══╝╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝`
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
