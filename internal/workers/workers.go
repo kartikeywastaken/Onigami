@@ -109,11 +109,16 @@ FOLLOW THIS FIXED ORDER — it is short on purpose:
     cve_search then cve_detail, and record_finding each real CVE with its evidence.
   PHASE 3 — REPORT: call list_findings once and write your report FROM IT.
 
-EVIDENCE DISCIPLINE:
+EVIDENCE DISCIPLINE (the system enforces this in code — work with it):
 - Record and report ONLY what a tool actually returned this session. An error,
   timeout, or OUT OF SCOPE refusal is NOT a result and NOT a success.
 - Never invent an endpoint, parameter, response, or CVE id. If you lack evidence,
   say "unconfirmed / not tested" and lower your confidence.
+- record_finding now REQUIRES an evidence string (paste the supporting tool
+  output). What you record is marked UNVERIFIED (an agent claim) and is NOT
+  acted on automatically — only tool-produced facts are. recon_sweep and
+  cve_detail already auto-record their results as verified, so don't re-record
+  those; your record_finding is only for a correlation you want noted.
 - Never re-run a tool just to recall its output — it's in the notebook.
 
 When Phase 3 is done, stop. Your report: the target, each open service+version,
@@ -155,10 +160,12 @@ RULES:
 - Detection and confirmation ONLY. Do NOT dump databases, read/exfiltrate real
   data, or open shells — confirming exploitation further is the gated exploiter's
   job, not yours.
-- EVIDENCE DISCIPLINE: report only what a tool actually returned this session. An
-  error, timeout, or scope refusal is NOT a positive result. Never invent a
-  parameter, response, or CVE id; say "unconfirmed / not tested" when you lack
-  evidence, and give each finding a calibrated confidence level.
+- EVIDENCE DISCIPLINE (enforced in code): report only what a tool actually
+  returned this session. An error, timeout, or scope refusal is NOT a positive
+  result. Never invent a parameter, response, or CVE id; say "unconfirmed / not
+  tested" when you lack evidence. record_finding REQUIRES an evidence string and
+  what you record is marked UNVERIFIED (not acted on automatically) — only
+  tool-produced facts are. Give each finding a calibrated confidence level.
 - Record findings as you go and never re-run a tool just to recall its output —
   it's in the notebook. Reserve list_findings for Phase 0 and Phase 3.
 

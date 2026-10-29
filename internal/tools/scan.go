@@ -227,7 +227,7 @@ func AnalystTools(sc *scope.Scope, findings *FindingsStore) []agent.Tool {
 	// tcp_probe grabs raw banners from non-HTTP ports (the safe nc stand-in).
 	ts = append(ts, NewHTTPRequest(sc))
 	ts = append(ts, NewTCPProbe(sc))
-	ts = append(ts, CVESearch{}, CVEDetail{})
+	ts = append(ts, NewCVESearch(findings), NewCVEDetail(findings))
 	ts = append(ts, NotebookTools(findings, "analyst")...) // shared engagement notebook
 	return ts
 }

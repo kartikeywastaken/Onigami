@@ -34,7 +34,14 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 // --- cve_search -----------------------------------------------------------
 
 // CVESearch finds CVEs affecting a named product/package via Red Hat's data.
-type CVESearch struct{}
+// It may hold the shared store; search results are exploratory, so it does not
+// auto-record (cve_detail records the specific, confirmed record instead).
+type CVESearch struct{ findings *FindingsStore }
+
+// NewCVESearch / NewCVEDetail build the CVE tools bound to the shared findings
+// store so cve_detail can record the real CVE record as a VERIFIED fact.
+func NewCVESearch(f *FindingsStore) CVESearch { return CVESearch{findings: f} }
+func NewCVEDetail(f *FindingsStore) CVEDetail { return CVEDetail{findings: f} }
 
 func (CVESearch) Name() string { return "cve_search" }
 func (CVESearch) Description() string {
@@ -90,7 +97,7 @@ func (CVESearch) Run(ctx context.Context, input json.RawMessage) (string, error)
 
 // CVEDetail fetches full detail for one CVE ID, merging CIRCL (description) and
 // Red Hat (severity, CVSS, affected packages, remediation state).
-type CVEDetail struct{}
+type CVEDetail struct{ findings *FindingsStore }
 
 func (CVEDetail) Name() string { return "cve_detail" }
 func (CVEDetail) Description() string {
@@ -105,7 +112,7 @@ func (CVEDetail) Schema() json.RawMessage {
       "required":["cve"]
     }`)
 }
-func (CVEDetail) Run(ctx context.Context, input json.RawMessage) (string, error) {
+func (c CVEDetail) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	var in struct {
 		CVE string `json:"cve"`
 	}
@@ -120,9 +127,12 @@ func (CVEDetail) Run(ctx context.Context, input json.RawMessage) (string, error)
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", id)
 
+	// Capture the key fields so we can record a compact verified finding too.
+	var desc, sev, cvss string
+
 	// CIRCL: a clean English description from the official CVE record.
 	if data, err := getJSON(ctx, circlCVEURL+id); err == nil {
-		if desc := circlDescription(data); desc != "" {
+		if desc = circlDescription(data); desc != "" {
 			fmt.Fprintf(&b, "Description: %s\n", desc)
 		}
 	}
@@ -130,11 +140,12 @@ func (CVEDetail) Run(ctx context.Context, input json.RawMessage) (string, error)
 	// Red Hat: severity, CVSS, affected packages, remediation.
 	if data, err := getJSON(ctx, redhatCVEURL+id+".json"); err == nil {
 		m := asMap(data)
-		if sev := mstr(m, "threat_severity"); sev != "" {
+		if sev = mstr(m, "threat_severity"); sev != "" {
 			fmt.Fprintf(&b, "Severity: %s\n", sev)
 		}
 		if cvss3 := asMap(m["cvss3"]); cvss3 != nil {
-			fmt.Fprintf(&b, "CVSS3: %s %s\n", mstr(cvss3, "cvss3_base_score"), mstr(cvss3, "cvss3_scoring_vector"))
+			cvss = strings.TrimSpace(mstr(cvss3, "cvss3_base_score") + " " + mstr(cvss3, "cvss3_scoring_vector"))
+			fmt.Fprintf(&b, "CVSS3: %s\n", cvss)
 		}
 		if det := asSlice(m["details"]); len(det) > 0 {
 			fmt.Fprintf(&b, "Details: %s\n", truncateLine(toStr(det[0]), 300))
@@ -153,6 +164,22 @@ func (CVEDetail) Run(ctx context.Context, input json.RawMessage) (string, error)
 	out := b.String()
 	if out == id+"\n" {
 		return "", fmt.Errorf("no data found for %s in CIRCL or Red Hat", id)
+	}
+
+	// Auto-record the real CVE record as a VERIFIED fact (it came straight from
+	// the vuln DB, not the model). This is what gives triage a trustworthy,
+	// exploitable finding to hand the exploit-dev — no hallucination involved.
+	// NOTE: "verified" means the CVE record is genuine; whether the in-scope
+	// target actually runs the affected version is the analyst's correlation.
+	if c.findings != nil {
+		summary := id
+		if sev != "" {
+			summary += " (" + sev + ")"
+		}
+		if desc != "" {
+			summary += ": " + truncateLine(desc, 120)
+		}
+		c.findings.Add("cve", "correlate", summary, truncateLine(out, 400))
 	}
 	return out, nil
 }

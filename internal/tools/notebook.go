@@ -30,7 +30,7 @@ type recordFinding struct {
 
 func (recordFinding) Name() string { return "record_finding" }
 func (recordFinding) Description() string {
-	return "Save a confirmed fact to the shared engagement notebook: an open port, a service+version, an endpoint, a parameter, a misconfiguration, a CVE, etc. Record every fact the moment you learn it so you never re-run a tool to recall it, and build your final report from these."
+	return "Record a finding you have DIRECT tool evidence for (an open port, a service+version, an endpoint, a parameter, a confirmed vuln). You MUST paste the supporting tool output into `evidence` — a finding with no evidence is rejected. Do NOT record anything a tool did not actually return this session; invented facts are the one thing that ruins the engagement. These records are marked 'unverified' (agent-asserted) and are NOT acted on automatically — only tool-produced facts are."
 }
 func (recordFinding) Schema() json.RawMessage {
 	return json.RawMessage(`{
@@ -38,9 +38,9 @@ func (recordFinding) Schema() json.RawMessage {
       "properties":{
         "phase":{"type":"string","description":"which phase this came from (triage, discover, enumerate, correlate), optional"},
         "summary":{"type":"string","description":"the fact itself, concise, e.g. \"port 80 open: Apache Tomcat/Coyote 1.1\" or \"/login.jsp has form fields uid,passw\""},
-        "evidence":{"type":"string","description":"the tool output or detail that supports it, optional"}
+        "evidence":{"type":"string","description":"REQUIRED: the exact tool output/detail that supports this fact, copied from a tool result you saw this session"}
       },
-      "required":["summary"]
+      "required":["summary","evidence"]
     }`)
 }
 func (t recordFinding) Run(_ context.Context, input json.RawMessage) (string, error) {
@@ -55,8 +55,15 @@ func (t recordFinding) Run(_ context.Context, input json.RawMessage) (string, er
 	if strings.TrimSpace(in.Summary) == "" {
 		return "", fmt.Errorf("summary must not be empty")
 	}
-	n := t.store.Add(t.role, in.Phase, in.Summary, in.Evidence)
-	return fmt.Sprintf("recorded (%d finding(s) in the engagement notebook).", n), nil
+	// Evidence is mandatory: it forces the model to cite a real tool result
+	// rather than assert a fact from nowhere. This is the cheapest, strongest
+	// brake on hallucinated findings.
+	if strings.TrimSpace(in.Evidence) == "" {
+		return "", fmt.Errorf("evidence is required — paste the tool output that supports this finding; do not record a fact you cannot back with a tool result")
+	}
+	// Agent-asserted → unverified. Only mechanical tools write verified facts.
+	n := t.store.AddClaim(t.role, in.Phase, in.Summary, in.Evidence)
+	return fmt.Sprintf("recorded as an UNVERIFIED claim (%d finding(s) total). Only tool-produced facts are acted on automatically.", n), nil
 }
 
 // --- list_findings --------------------------------------------------------

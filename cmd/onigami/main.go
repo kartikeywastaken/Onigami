@@ -23,6 +23,8 @@ func main() {
 	// --tui opts into the terminal dashboard; by default we keep the plain line
 	// printer, which stays clean when piped/teed to a log file.
 	tuiFlag := flag.Bool("tui", false, "show the live terminal dashboard instead of plain line output")
+	missionFlag := flag.String("mission", "", "the engagement objective the crew works toward (also ONIGAMI_MISSION; prompted if unset)")
+	llmOrchFlag := flag.Bool("llm-orch", false, "drive the engagement with the free-form LLM orchestrator instead of the structured stage pipeline (default)")
 	flag.Parse()
 
 	// loading env
@@ -103,11 +105,12 @@ func main() {
 	// can always write a report from it (see the end of main).
 	findings := tools.NewFindingsStore()
 
-	// newOrch builds the orchestrator crew. Both the plain and TUI paths use it
-	// with their own observer/approver, so the engagement itself is identical —
-	// only how we watch it, and how the approval gate is answered, differ.
-	newOrch := func(observer agent.Observer, approver agent.Approver) *agent.Agent {
-		return orchestrator.New(orchestrator.Config{
+	// makeConfig assembles the orchestrator Config. Both the plain and TUI paths,
+	// and both engagement drivers (the structured pipeline and the LLM
+	// orchestrator), use it with their own observer/approver — so the engagement
+	// itself is identical; only how we watch it and answer the gate differ.
+	makeConfig := func(observer agent.Observer, approver agent.Approver) orchestrator.Config {
+		return orchestrator.Config{
 			Orchestrator: orchClient,
 			Analyst:      analystClient,
 			WebTester:    webTesterClient,
@@ -126,13 +129,29 @@ func main() {
 			Scope:    sc,
 			Observer: observer,
 			Approver: approver,
-		})
+		}
 	}
 
-	objective := "Assess the in-scope target(s) for exploitable vulnerabilities and, if you confirm one, have the Exploit-Dev produce a proof-of-concept."
-	brief := fmt.Sprintf("%s\n\nIN-SCOPE TARGETS (authorized): %s\nStay strictly within this scope. Work in steps and delegate to your specialists.",
-		objective, sc)
-	task := agent.Task{Objective: objective, Brief: brief}
+	// The mission is the operator's objective — what the crew should achieve.
+	// Supplied via --mission, the ONIGAMI_MISSION env var, or an interactive
+	// prompt; a blank mission falls back to the generic default inside the driver.
+	mission := resolveMission(*missionFlag)
+
+	// drive runs one engagement with the given observer/approver and returns its
+	// summary. By default it's the structured stage pipeline (recon → web →
+	// triage → exploit-dev → exploiter), which guarantees the progression;
+	// --llm-orch selects the older free-form LLM brain instead.
+	drive := func(observer agent.Observer, approver agent.Approver) (string, error) {
+		cfg := makeConfig(observer, approver)
+		if *llmOrchFlag {
+			objective := mission
+			brief := fmt.Sprintf("%s\n\nIN-SCOPE TARGETS (authorized): %s\nStay strictly within this scope. Work in steps and delegate to your specialists.",
+				objective, sc)
+			rep, e := orchestrator.New(cfg).Run(context.Background(), agent.Task{Objective: objective, Brief: brief}, observer)
+			return rep.Summary, e
+		}
+		return orchestrator.NewPipeline(cfg, mission).Run(context.Background())
+	}
 
 	var report agent.Report
 	if *tuiFlag {
@@ -142,14 +161,21 @@ func main() {
 			Scope:    sc.String(),
 			Findings: findings,
 			Start: func(observer agent.Observer, approver agent.Approver) (string, error) {
-				rep, e := newOrch(observer, approver).Run(context.Background(), task, observer)
-				return rep.Summary, e
+				// Route Groq retry/backoff notices into the activity stream as
+				// events, so they don't write over the alt-screen TUI.
+				llm.RetryNotifier = func(msg string) {
+					observer(agent.Event{Agent: agent.Role("groq"), Kind: agent.EventMessage, Text: msg})
+				}
+				defer func() { llm.RetryNotifier = nil }()
+				return drive(observer, approver)
 			},
 		})
 		report, err = agent.Report{Summary: summary}, runErr
 	} else {
 		// Plain line output (the default): print the banner, then stream events.
 		fmt.Printf("\nonigami — engagement\n")
+		fmt.Printf("driver:   %s\n", driverName(*llmOrchFlag))
+		fmt.Printf("mission:  %s\n", mission)
 		fmt.Printf("models:   orch=%s  analyst=%s  web=%s  exploit=%s  exploiter=%s\n",
 			orchModel, analystModel, webTesterModel, exploitDevModel, exploiterModel)
 		fmt.Printf("scope:    %s\n", sc)
@@ -163,7 +189,8 @@ func main() {
 		fmt.Printf("findings: %s\n", findings.Path())
 		fmt.Println(strings.Repeat("─", 64))
 
-		report, err = newOrch(obs, terminalApprover).Run(context.Background(), task, obs)
+		summary, runErr := drive(obs, terminalApprover)
+		report, err = agent.Report{Summary: summary}, runErr
 	}
 
 	// Always produce output. Whether the orchestrator finished cleanly or the run
@@ -308,6 +335,30 @@ func promptScope() (*scope.Scope, error) {
 		return nil, fmt.Errorf("scope is required (nothing was entered)")
 	}
 	return scope.Parse(raw)
+}
+
+// resolveMission figures out the engagement objective, in priority order:
+// the --mission flag, then the ONIGAMI_MISSION env var, then an interactive
+// prompt. A blank result is fine — the driver falls back to a generic default.
+func resolveMission(flagVal string) string {
+	if m := strings.TrimSpace(flagVal); m != "" {
+		return m
+	}
+	if m := strings.TrimSpace(os.Getenv("ONIGAMI_MISSION")); m != "" {
+		return m
+	}
+	fmt.Println("What should this engagement achieve? (the mission the crew works toward)")
+	fmt.Print("Mission [blank = assess for any exploitable vulnerability]: ")
+	line, _ := stdin.ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
+// driverName labels which engagement driver is in use, for the startup banner.
+func driverName(llmOrch bool) string {
+	if llmOrch {
+		return "LLM orchestrator (free-form; --llm-orch)"
+	}
+	return "structured pipeline (recon → web → triage → exploit-dev → exploiter)"
 }
 
 // terminalApprover is the proceed/hold gate. The worker's output has already

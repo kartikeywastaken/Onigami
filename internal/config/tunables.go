@@ -24,6 +24,17 @@ func IntEnv(name string, def int) int {
 	return def
 }
 
+// FloatEnv returns the float value of env var `name`, or `def` if unset, blank,
+// or not a non-negative number. Used for e.g. the model sampling temperature.
+func FloatEnv(name string, def float64) float64 {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return f
+		}
+	}
+	return def
+}
+
 // SecondsEnv reads env var `name` as a number of seconds (e.g. "10" or "2.5")
 // and returns it as a time.Duration, or `def` if unset, blank, or not a
 // positive number.

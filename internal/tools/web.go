@@ -311,7 +311,7 @@ func WebTesterTools(sc *scope.Scope, findings *FindingsStore) []agent.Tool {
 		ts = append(ts, Nikto{sc})
 	}
 	// Manual primitives + research + working memory, always available.
-	ts = append(ts, NewHTTPRequest(sc), NewTCPProbe(sc), CVESearch{}, CVEDetail{})
+	ts = append(ts, NewHTTPRequest(sc), NewTCPProbe(sc), NewCVESearch(findings), NewCVEDetail(findings))
 	ts = append(ts, NotebookTools(findings, "web-tester")...)
 	return ts
 }

@@ -16,6 +16,23 @@ import (
 	"onigami/internal/config"
 )
 
+// RetryNotifier, when set, receives the client's retry/backoff notices instead
+// of them being written to stderr. The TUI sets this so the notices show up in
+// the activity stream rather than corrupting the alt-screen; left nil, notices
+// print to stderr with a "[groq]" prefix as before (the plain-output default).
+var RetryNotifier func(msg string)
+
+// notify routes one retry/backoff notice either to RetryNotifier (if set) or to
+// stderr. Callers pass the message without a prefix or trailing newline.
+func notify(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if RetryNotifier != nil {
+		RetryNotifier(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "[groq] "+msg)
+}
+
 // Groq is a real llm.Client backed by Groq's API.
 //
 // Groq speaks the OpenAI "chat completions" format, which is shaped a little
@@ -40,6 +57,12 @@ type Groq struct {
 	// instead of letting one hiccup kill a whole engagement. Tunable via env.
 	maxAttempts int           // total tries before giving up
 	retryBase   time.Duration // base delay for exponential backoff (net errors / 5xx)
+
+	// temperature controls sampling randomness. We keep it LOW by default
+	// because this is a factual, tool-driven agent: a high temperature makes the
+	// model invent endpoints, versions, and CVEs (hallucinate). Tunable via
+	// GROQ_TEMPERATURE (default 0.2); 0 is fully greedy/deterministic.
+	temperature float64
 }
 
 // NewGroq builds a Groq client. The API key should come from the environment
@@ -56,6 +79,7 @@ func NewGroq(apiKey string) *Groq {
 		http:        &http.Client{Timeout: config.SecondsEnv("GROQ_HTTP_TIMEOUT", 120*time.Second)},
 		maxAttempts: config.IntEnv("GROQ_MAX_RETRIES", 6),
 		retryBase:   config.SecondsEnv("GROQ_RETRY_BASE", 1*time.Second),
+		temperature: config.FloatEnv("GROQ_TEMPERATURE", 0.2),
 	}
 }
 
@@ -70,6 +94,7 @@ type groqRequest struct {
 	Messages        []groqMessage `json:"messages"`
 	Tools           []groqTool    `json:"tools,omitempty"`
 	MaxTokens       int           `json:"max_tokens,omitempty"`
+	Temperature     float64       `json:"temperature"`                // low, to curb hallucination (always sent, 0 is valid)
 	ReasoningFormat string        `json:"reasoning_format,omitempty"` // "parsed" for reasoning models
 }
 
@@ -119,10 +144,11 @@ type groqResponse struct {
 // that long (respecting cancellation), and retry — up to a few times.
 func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 	body := groqRequest{
-		Model:     req.Model,
-		Messages:  toGroqMessages(req.System, req.Messages),
-		Tools:     toGroqTools(req.Tools),
-		MaxTokens: req.MaxTokens,
+		Model:       req.Model,
+		Messages:    toGroqMessages(req.System, req.Messages),
+		Tools:       toGroqTools(req.Tools),
+		MaxTokens:   req.MaxTokens,
+		Temperature: g.temperature,
 	}
 	// Ask reasoning models to return their chain-of-thought in a separate field
 	// (so we can show it). Only for models that support it, or the call errors.
@@ -150,7 +176,7 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 				return Response{}, fmt.Errorf("groq request failed after %d attempts: %w", attempt, err)
 			}
 			wait := g.backoff(attempt)
-			fmt.Fprintf(os.Stderr, "[groq] network error (%v); waiting %s then retrying (%d/%d)\n",
+			notify("network error (%v); waiting %s then retrying (%d/%d)",
 				err, wait.Round(time.Second), attempt, g.maxAttempts)
 			if !sleepCtx(ctx, wait) {
 				return Response{}, ctx.Err()
@@ -161,7 +187,7 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 		// Rate limited: respect the server's Retry-After.
 		if status == http.StatusTooManyRequests && attempt < g.maxAttempts {
 			wait := parseRetryAfter(headers, string(respBytes))
-			fmt.Fprintf(os.Stderr, "[groq] rate limited; waiting %s then retrying (%d/%d)\n",
+			notify("rate limited; waiting %s then retrying (%d/%d)",
 				wait.Round(time.Second), attempt, g.maxAttempts)
 			if !sleepCtx(ctx, wait) {
 				return Response{}, ctx.Err()
@@ -172,7 +198,7 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 		// Transient server error (5xx): back off and retry.
 		if status >= 500 && status <= 599 && attempt < g.maxAttempts {
 			wait := g.backoff(attempt)
-			fmt.Fprintf(os.Stderr, "[groq] server error %d; waiting %s then retrying (%d/%d)\n",
+			notify("server error %d; waiting %s then retrying (%d/%d)",
 				status, wait.Round(time.Second), attempt, g.maxAttempts)
 			if !sleepCtx(ctx, wait) {
 				return Response{}, ctx.Err()
@@ -188,7 +214,7 @@ func (g *Groq) Complete(ctx context.Context, req Request) (Response, error) {
 			(strings.Contains(string(respBytes), "tool_use_failed") ||
 				strings.Contains(string(respBytes), "Failed to parse tool call")) {
 			wait := g.backoff(attempt)
-			fmt.Fprintf(os.Stderr, "[groq] malformed tool call (400 tool_use_failed); waiting %s then retrying (%d/%d)\n",
+			notify("malformed tool call (400 tool_use_failed); waiting %s then retrying (%d/%d)",
 				wait.Round(time.Second), attempt, g.maxAttempts)
 			if !sleepCtx(ctx, wait) {
 				return Response{}, ctx.Err()
