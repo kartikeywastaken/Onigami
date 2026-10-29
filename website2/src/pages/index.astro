@@ -1,0 +1,120 @@
+---
+import Base from '../layouts/Base.astro';
+import Swatches from '../components/Swatches.astro';
+import StateIcon from '../components/StateIcon.astro';
+import { site, steps, stages, states } from '../data/site';
+const grown = stages.filter((s) => s.state === 'grown').length;
+const build = [site.clone, ...site.build];
+---
+<Base>
+  <main id="main" tabindex="-1">
+    <section class="hero is-empty" data-hero aria-labelledby="hero-title">
+      <canvas class="hero__canvas" data-garden aria-hidden="true"></canvas>
+      <label class="hero__field">
+        <span class="sr-only">A toy Onigami prompt. Type a command: space cuts a word, backspace withers a letter, enter runs it. Try echo, type, pwd, help or exit.</span>
+        <input class="hero__input" data-garden-input type="text" aria-label="Onigami prompt: type a command" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" />
+      </label>
+      <p class="hero__tate" lang="ja" aria-hidden="true"><span>鬼が切り、</span><span>神が育てる。</span></p>
+      <p class="hero__out" data-garden-out aria-live="polite"></p>
+
+      <div class="hero__bottom">
+        <h1 id="hero-title" class="hero__title">
+          <span class="hero__name" data-split="chars" data-intro>Onigami</span>
+          <span class="hero__claim" data-split="lines" data-intro data-delay="0.2">is an agentic red-team crew. Here, every word you type grows its own garden.</span>
+        </h1>
+        <div class="hero__ui" data-hero-ui>
+          <ul class="hints" aria-label="How the prompt works">
+            <li class="hints__start"><span class="on-fine">Click the garden and type</span><span class="on-coarse">Tap the garden to type</span></li>
+            <li><kbd>space</kbd> cuts</li>
+            <li><kbd>⌫</kbd> withers</li>
+            <li><kbd>enter</kbd> runs</li>
+            <li class="hints__try">try <code>echo hello</code></li>
+          </ul>
+          <Swatches />
+        </div>
+      </div>
+    </section>
+
+    <section class="duo" aria-labelledby="duo-title">
+      <h2 id="duo-title" class="duo__title" data-split="lines">The name is two kanji. <span lang="ja">鬼神</span>, a fierce god, is written with one hand that strikes and one that keeps it honest.</h2>
+      <div class="duo__grid">
+        <article class="duo__half duo__half--oni">
+          <p class="duo__glyph" lang="ja" aria-hidden="true" data-reveal="clip">鬼</p>
+          <h3 class="duo__name">Oni <span lang="ja">おに</span><span class="duo__role">the strike</span></h3>
+          <p>The demon you send ahead. The oni is every tool that reaches into a target the way an attacker would: the scanners that find the open joins, the exploit that proves one can be forced. It is the force, pointed where you aim it.</p>
+        </article>
+        <article class="duo__half duo__half--kami">
+          <p class="duo__glyph" lang="ja" aria-hidden="true" data-reveal="clip" data-delay="0.12">神</p>
+          <h3 class="duo__name">Kami <span lang="ja">かみ</span><span class="duo__role">the proof</span></h3>
+          <p>The discipline that keeps the oni honest. Scope is enforced in code, every finding grows from real evidence, and nothing fires live without your word. A claim is ink until a tool confirms it; only then does it mean anything.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="loop" aria-labelledby="loop-title">
+      <div class="loop__head">
+        <h2 id="loop-title" class="h2" data-split="lines">Four stages, one engagement.</h2>
+        <p class="loop__note">Onigami runs them in this fixed order, so a run always reaches a proof instead of wandering. Example posters; the sketches are illustrative.</p>
+      </div>
+      <div class="loop__grid">
+        <div class="loop__stage">
+          <figure class="loop__poster">
+            <canvas class="loop__canvas" data-loop-canvas aria-hidden="true"></canvas>
+            <figcaption class="loop__cap"><span lang="ja" aria-hidden="true" data-loop-jp>探</span> <span class="loop__cmd" data-loop-cap><span>grow ·</span> <code>onigami recon</code></span></figcaption>
+          </figure>
+        </div>
+        <ol class="loop__steps">
+          {steps.map((s, i) => (
+            <li class="step" data-step={i} data-text={s.poster.text} data-preset={s.poster.preset} data-seed={s.poster.seed} data-jp={s.jp} id={`step-${s.id}`}>
+              <p class="step__meta"><span class="step__n">0{i + 1}</span><span class="step__jp" lang="ja" aria-hidden="true">{s.jp}</span><span class="step__kana" lang="ja" aria-hidden="true">{s.kana}</span><span class="step__en">{s.en}</span></p>
+              <canvas class="step__poster" data-step-canvas aria-hidden="true"></canvas>
+              <h3 class="step__title">{s.title}</h3>
+              <p class="step__text">{s.text}</p>
+              <pre class="step__code" aria-label={`C sketch of the ${s.en.toLowerCase()} step`}><code>{s.code}</code></pre>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <section id="growth" class="growth" aria-labelledby="growth-title">
+      <div class="growth__head">
+        <h2 id="growth-title" class="h2" data-split="lines">What has grown so far.</h2>
+        <div class="growth__aside">
+          <p><strong>{grown} of {stages.length}</strong> have grown. Onigami is built one capability at a time; this record is updated as each one lands. <a class="i-link" href={site.github} rel="noopener">Source on GitHub</a></p>
+          <div class="meter" role="img" aria-label={`${grown} of ${stages.length} stages grown`}>
+            <span class="meter__fill" data-meter style={`--p:${grown / stages.length}`}></span>
+          </div>
+          <ul class="legend">
+            {(['grown', 'bud', 'seed'] as const).map((k) => (
+              <li><StateIcon state={k} /><span lang="ja">{states[k].jp}</span> {states[k].en}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <ol class="record">
+        {stages.map((s) => (
+          <li class={`record__row is-${s.state}`}>
+            <span class="record__n">{s.n}</span>
+            <span class="record__name">{s.name}</span>
+            <span class="record__note">{s.note}</span>
+            <span class="record__state"><StateIcon state={s.state} /><span lang="ja" aria-hidden="true">{states[s.state].jp}</span><span class="record__en">{states[s.state].en}</span></span>
+          </li>
+        ))}
+      </ol>
+    </section>
+
+    <section id="summon" class="summon" aria-labelledby="summon-title">
+      <p class="summon__jp" lang="ja" aria-hidden="true" data-split="chars">召喚</p>
+      <div class="summon__body">
+        <h2 id="summon-title" class="summon__title" data-split="chars">Summon it.</h2>
+        <p class="summon__lede">Onigami builds with Go, on macOS and Linux. Three lines and the crew is yours.</p>
+        <div class="summon__term">
+          <pre class="term" id="summon-cmd">{build.map((l) => <span class="ln"><span class="prompt" aria-hidden="true">$ </span>{l}{'\n'}</span>)}</pre>
+          <button class="btn" type="button" data-copy="summon-cmd" aria-label="Copy the build commands"><span class="btn__fill" aria-hidden="true"></span><span class="btn__label" data-copy-label>Copy</span></button>
+        </div>
+        <p class="summon__then">Give it a scope and a mission, and a Groq key to think with. It talks only to that and to the target you cleared. Point it only at systems you are authorized to test.</p>
+      </div>
+    </section>
+  </main>
+</Base>

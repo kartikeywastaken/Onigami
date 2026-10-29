@@ -1,0 +1,25 @@
+---
+import { site } from '../data/site';
+const links = [
+  { href: '/#growth', jp: '道', en: 'Roadmap' },
+  { href: site.github, jp: '源', en: 'Source', ext: true },
+];
+---
+<header class="frame" data-layer="content">
+  <a class="frame__tl brand" href="/">
+    <span class="brand__kanji" lang="ja" aria-hidden="true">鬼神</span>
+    <span class="brand__name">Onigami</span><span class="sr-only">, home</span>
+  </a>
+  <nav class="frame__tr" data-nav aria-label="Primary">
+    <ul>
+      {links.map((l) => (
+        <li>
+          <a class="nav-link" href={l.href} rel={l.ext ? 'noopener' : undefined}>
+            <span class="nav-link__jp" lang="ja" aria-hidden="true">{l.jp}</span>
+            <span class="nav-link__en">{l.en}</span>{l.ext && <span class="sr-only"> (external)</span>}
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+</header>

@@ -1,0 +1,67 @@
+@font-face {
+  font-family: 'Playfair Display';
+  src: url('/fonts/playfair-display-400_900-normal.woff2') format('woff2');
+  font-weight: 400 900; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Playfair Display';
+  src: url('/fonts/playfair-display-400_900-italic.woff2') format('woff2');
+  font-weight: 400 900; font-style: italic; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('/fonts/dm-mono-400-normal.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'DM Mono';
+  src: url('/fonts/dm-mono-500-normal.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* Subset to the Japanese on the site (scripts/jp-subset.mjs regenerates it) */
+@font-face {
+  font-family: 'Shippori Mincho B1';
+  src: url('/fonts/shippori-mincho-b1-800-subset.woff2') format('woff2');
+  font-weight: 800; font-style: normal; font-display: swap;
+}
+
+:root {
+  /* Default palette 朱塗 Shrine. theme.ts rewrites these from the garden palette (DESIGN.md). */
+  --c-bg: #0d0a09;
+  --c-fg: #f4ede1;
+  --c-muted: #a9a196;
+  --c-flower: #f2452d;
+  --c-on-flower: #000000;
+  --c-stem: #c9a24b;
+  --c-petal: #ffd9b8;
+  --c-line: rgb(244 237 225 / 0.16);
+  --c-veil: rgb(13 10 9 / 0.86);
+  --c-accent: var(--c-flower);
+  --c-curtain: var(--c-flower);
+
+  --f-display: 'Playfair Display', 'Shippori Mincho B1', Georgia, serif;
+  --f-body: 'Playfair Display', 'Shippori Mincho B1', Georgia, serif;
+  --f-jp: 'Shippori Mincho B1', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+  --f-mono: 'DM Mono', ui-monospace, Menlo, monospace;
+
+  --t-mega: clamp(4.4rem, 0.4rem + 15vw, 17rem);
+  --t-xl: clamp(2.4rem, 1.2rem + 4.6vw, 5.8rem);
+  --t-l: clamp(1.65rem, 1.15rem + 1.9vw, 3rem);
+  --t-m: clamp(1.25rem, 1.1rem + 0.6vw, 1.65rem);
+  --t-body: clamp(1.0625rem, 1rem + 0.25vw, 1.2rem);
+  --t-s: 0.875rem;
+  --t-xs: 0.75rem;
+
+  --u: clamp(0.5rem, 0.35rem + 0.6vw, 1rem);
+  --gutter: clamp(1rem, 0.6rem + 1.6vw, 2.5rem);
+  --pill: 999px;
+
+  --z-content: 1; --z-header: 50; --z-curtain: 90; --z-loader: 100;
+  --e-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-soft: cubic-bezier(0.215, 0.61, 0.355, 1);
+  --e-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}

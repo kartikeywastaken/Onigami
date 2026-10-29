@@ -1,0 +1,21 @@
+---
+// seed: a dot in the soil. bud: a stem with two leaves. grown: a stem with a rose.
+interface Props { state: 'grown' | 'bud' | 'seed' }
+const { state } = Astro.props;
+---
+<svg class={`sicon sicon--${state}`} viewBox="0 0 20 24" width="20" height="24" aria-hidden="true">
+  <path d="M2 22.5h16" stroke="currentColor" stroke-width="1" opacity=".4" />
+  {state === 'seed' && <ellipse cx="10" cy="20.2" rx="2.6" ry="1.8" fill="var(--c-stem)" />}
+  {state !== 'seed' && <path d="M10 22.5C10 17 8.6 13.5 10 8" fill="none" stroke="var(--c-stem)" stroke-width="1.6" stroke-linecap="round" />}
+  {state === 'bud' && <>
+    <path d="M10 15c-3.4-.4-5-2.2-5.4-4.6 2.8-.2 4.6 1.4 5.4 4.6Z" fill="var(--c-stem)" />
+    <path d="M10 11.6c2.6-.6 4-2.4 4-4.8-2.4.4-3.6 2-4 4.8Z" fill="var(--c-stem)" />
+  </>}
+  {state === 'grown' && <>
+    <path d="M10 16.5c-3-.3-4.6-1.9-5-4 2.5-.2 4.2 1.2 5 4Z" fill="var(--c-stem)" />
+    <circle cx="7.6" cy="6.4" r="3.3" fill="var(--c-flower)" />
+    <circle cx="12.4" cy="6.4" r="3.3" fill="var(--c-flower)" />
+    <circle cx="10" cy="4.2" r="3.2" fill="var(--c-flower)" />
+    <path d="M8.4 5.6c.6-1.4 2.6-1.6 3.2-.2.4 1-.6 1.8-1.4 1.4" fill="none" stroke="var(--c-petal)" stroke-width=".8" stroke-linecap="round" />
+  </>}
+</svg>

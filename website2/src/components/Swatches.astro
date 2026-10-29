@@ -1,0 +1,15 @@
+---
+import { PAL } from '../garden/core.js';
+interface Props { label?: string; big?: boolean }
+const { label = 'Garden palette', big = false } = Astro.props;
+---
+<div class:list={['swatches', { 'swatches--big': big }]} role="group" aria-label={label}>
+  {PAL.map((p, i) => (
+    <button type="button" class="swatch" data-swatch={i} aria-pressed={i === 0 ? 'true' : 'false'} title={`${p[2]} ${p[1]}`} style={`--sw-bg:${p[3]};--sw-fl:${p[4]};--sw-st:${p[5]};--sw-tx:${p[7]}`}>
+      <span class="swatch__dot" aria-hidden="true"></span>
+      {big
+        ? <span class="swatch__name"><span lang="ja">{p[2]}</span> {p[1]}</span>
+        : <span class="sr-only">{p[1]} palette</span>}
+    </button>
+  ))}
+</div>

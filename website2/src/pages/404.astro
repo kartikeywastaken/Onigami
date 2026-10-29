@@ -1,0 +1,18 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Nothing grows here" page="lost" description="No page lives at this path. The garden grows for a moment and withers; go back to the prompt." noindex>
+  <main id="main" tabindex="-1" class="lost">
+    <div class="lost__canvas-wrap" aria-hidden="true"><canvas class="lost__canvas" data-lost-canvas></canvas></div>
+    <div class="lost__inner">
+      <p class="lost__jp" lang="ja" aria-hidden="true">道に迷った</p>
+      <h1 class="lost__title" data-split="lines" data-intro>No kami lives at this path.</h1>
+      <pre class="term lost__term"><span class="ln"><span class="prompt" aria-hidden="true">$ </span>cd <span data-path>this page</span></span>
+<span class="ln ln--err">cd: no such file or directory</span></pre>
+      <div class="lost__links" data-reveal="fade" data-intro data-delay="0.35">
+        <a class="btn" href="/"><span class="btn__fill" aria-hidden="true"></span><span class="btn__label">Back to the prompt</span></a>
+        <a class="u-link" href="/#growth">See what has grown<span class="arrow" aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </main>
+</Base>

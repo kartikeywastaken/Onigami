@@ -7,3 +7,6 @@
 
 # Editor/OS cruft.
 .DS_Store
+
+# Secondary site — not used; website2 is the one we keep.
+/website/
