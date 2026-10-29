@@ -1,104 +1,123 @@
 # onigami
 
-An agentic AI system in Go for **authorized, ethical** red-team / security
-learning. One orchestrator agent plans an engagement and delegates to two
-specialist workers — an **Analyst** (recon + vulnerability research) and an
-**Exploit-Dev** (proof-of-concept code) — then synthesizes their reports.
+An agentic AI crew in Go for **authorized, ethical** red-team / security learning
+(CTFs, labs, and systems you own or are cleared to test). It plans an engagement,
+runs real security tools, grounds every finding in their output, and gates anything
+that fires live behind an operator approval.
 
-> Status: early. The engine runs end-to-end against the real **Groq** API.
-> The Bubble Tea TUI is next.
+> Status: the engine runs end-to-end against the real **Groq** API, drives real
+> tools (nmap, nikto, sqlmap, nuclei, ffuf, testssl.sh, optional Metasploit), and
+> ships a Bubble Tea terminal dashboard.
 
-## The idea in one picture
+## How it works
+
+onigami runs an engagement as a **fixed pipeline** so a run always drives toward a
+proof instead of wandering. Each stage is a fresh, stateless specialist agent; the
+orchestrator decides what runs next and carries the findings between stages.
 
 ```
-            ORCHESTRATOR  (long-lived, holds the plan & findings)
-                 │  delegates via "dispatch" tools
-      ┌──────────┴───────────┐
-      ▼                      ▼
-   ANALYST               EXPLOIT-DEV
-  (ephemeral,            (ephemeral,
-   stateless)            stateless)
-   tools: recon,         writes a PoC for ONE
-   cve_lookup            confirmed finding
+STAGE 1  RECON         map the in-scope target (ports, services, web surface)
+STAGE 2  WEB TESTING   confirm OWASP-style issues on any web surface found
+STAGE 3  TRIAGE        rank confirmed findings, pick what to prove
+STAGE 4  EXPLOIT-DEV   write a proof-of-concept for each selected finding
+STAGE 5  EXPLOITER     (optional) demonstrate with Metasploit — scope-checked,
+                        operator-gated, and audited on every run
 ```
 
-- **Orchestrator** is the only agent with memory. It decides what to do next,
-  writes a tailored brief, spawns a worker, reads the one report that comes
-  back, and repeats.
-- **Workers are ephemeral and stateless**: a fresh one is built for every task
-  and discarded after it reports. Nothing carries over between them.
-- **The key trick:** a worker is exposed to the orchestrator as a *tool*
-  (`dispatch_analyst`, `dispatch_exploit_dev`). So the orchestrator "delegating"
-  and a worker "using nmap" are the same mechanism — the agent loop — at two
-  levels.
+- **Findings come from tools, not from the model.** Each agent emits real tool
+  calls (`exec.CommandContext` to the scanner on `PATH`); coded drivers
+  (`recon_sweep`, `web_sweep`) run the scanners and record only *verified* findings.
+  An agent that tries to finish without using a tool is bounced back.
+- **Workers are ephemeral and stateless.** A fresh one is built per stage and
+  discarded after it reports. The orchestrator is the only thing with memory.
+- **Nothing dangerous runs unasked.** Every scan is scope-checked, and live
+  exploitation (Stage 5) is gated behind an operator approval and written to an
+  audit log.
+
+There is also a free-form LLM orchestrator (`--llm-orch`) that delegates to workers
+as tools rather than following the fixed stages; the structured pipeline is the
+default.
 
 ## Layout
 
 ```
-cmd/onigami/main.go        CLI entry point; runs a demo engagement
+cmd/onigami/main.go        CLI: flags, model wiring, plain vs. TUI, mission prompt
 internal/
-  llm/llm.go               the model abstraction (provider-agnostic)
-  llm/groq.go              the Groq client (OpenAI-compatible)
-  config/env.go            loads the .env file
-  agent/tool.go            the Tool interface + ToolSet
   agent/agent.go           THE AGENT LOOP (start here)
-  orchestrator/orch.go     assembles the brain + its two workers
-  workers/workers.go       the specialists + "worker-as-a-tool"
-  tools/stubs.go           placeholder safe tools (recon, cve_lookup)
+  agent/tool.go            the Tool interface + ToolSet
+  agent/approval.go        operator gate for live/destructive actions
+  orchestrator/pipeline.go the fixed stage pipeline (recon → … → exploiter)
+  orchestrator/orch.go     the free-form LLM orchestrator (--llm-orch)
+  workers/workers.go       the specialists (recon, web, exploit-dev, exploiter)
+  tools/                   real tools: exec, recon, scan, http, tcp, web,
+                           websweep, cve, msf, findings, audit, notebook
+  scope/scope.go           in-scope enforcement (hosts/targets)
+  config/                  .env loading + env-overridable tunables
+  llm/                     the provider-agnostic model client (Groq)
+  ui/                      the Bubble Tea terminal dashboard
 ```
 
-Read order for understanding the design: `agent/agent.go` →
-`workers/workers.go` → `orchestrator/orch.go`.
+Read order for the design: `agent/agent.go` → `workers/workers.go` →
+`orchestrator/pipeline.go`.
 
 ## Run
 
-1. Put your Groq API key in `.env` at the project root (get one free at
-   https://console.groq.com/keys):
+1. Put your Groq API key in `.env` at the project root (free at
+   https://console.groq.com/keys). `.env` is gitignored — the key is never read
+   from source.
 
    ```
    GROQ_API_KEY=your_key_here
    # optional: GROQ_MODEL=openai/gpt-oss-120b
    ```
 
-2. Run it:
+2. Give it a mission and a target. The mission is **required** (it is prompted if
+   unset):
 
    ```bash
-   go run ./cmd/onigami
+   go run ./cmd/onigami --mission "assess the in-scope web app for exploitable issues"
+   # live terminal dashboard instead of plain output:
+   go run ./cmd/onigami --tui
    ```
 
-You'll see the orchestrator spawn the Analyst (which calls its tools), then the
-Exploit-Dev, then print a final engagement summary.
+Only point onigami at systems you are authorized to test. Scope is enforced in code.
 
-The key is read from `.env` (which is gitignored) or a real `GROQ_API_KEY`
-environment variable — never from the source code.
+### Tools
 
-### Model choice (Groq)
+Each stage uses whatever scanners are on your `PATH`; missing ones are skipped. For
+the full pipeline, install: `nmap`, `nikto`, `sqlmap`, `nuclei` (+ templates),
+`ffuf`, `testssl.sh`, and optionally Metasploit for Stage 5.
+
+### Models (Groq)
 
 Groq is OpenAI-compatible and fast — ideal for agent loops, which make many
-sequential calls. Free-tier models worth using here:
+sequential calls. Defaults, each overridable by env var:
 
-| Model | Why |
-|---|---|
-| `llama-3.3-70b-versatile` (default) | most reliable tool-calling |
-| `openai/gpt-oss-120b` | stronger planning; good for the orchestrator |
-| `openai/gpt-oss-20b` | smaller/faster |
+| Role | Env var | Default |
+|---|---|---|
+| orchestrator | `GROQ_MODEL_ORCH` | `openai/gpt-oss-120b` |
+| web-tester / exploit-dev / exploiter | `GROQ_MODEL_WEBTESTER` etc. | `openai/gpt-oss-120b` |
+| analyst (recon) | `GROQ_MODEL_ANALYST` | `openai/gpt-oss-20b` |
 
-The key is read from `GROQ_API_KEY` — it never goes in the code.
+`GROQ_MODEL` sets the overall default. The smaller workers use a separate per-model
+rate-limit bucket so the orchestrator isn't starved.
 
 ## Design notes
 
 - **Everything depends on the `llm.Client` interface, never a concrete model.**
-  Swapping or adding a model provider is a one-file change (`internal/llm/`);
-  the agents and orchestrator never change.
+  Swapping or adding a provider is a one-file change in `internal/llm/`; the agents
+  and pipeline never change.
 - **Agents never import the UI.** They emit `agent.Event` values through an
-  `Observer` callback; the CLI (and later the TUI) decide how to display them.
-- **Safety cap:** every agent has a `MaxTurns` limit so a confused loop can't
-  run forever.
+  `Observer` callback; the CLI and the TUI decide how to display them.
+- **Tunables are env-overridable, not hardcoded** — scan caps, timeouts, severities
+  and model picks all read from the environment with documented defaults
+  (`internal/config/tunables.go`).
+- **Safety caps:** every agent has a `MaxTurns` limit so a confused loop can't run
+  forever, and scope + approval + audit gate anything that touches a real target.
 
 ## Scope / ethics
 
-onigami is for authorized security testing, CTFs, labs, and learning. The
-orchestrator and worker prompts state the engagement is authorized and ethical.
-Scope enforcement, authorization checks, and audit logging are planned as
-first-class features.
-# Onigami
+onigami is for authorized security testing, CTFs, labs, and learning. Scope
+enforcement, authorization checks, operator gating, and audit logging are
+first-class: scans are checked against the configured scope, and live exploitation
+requires an explicit operator approval.
