@@ -1,0 +1,45 @@
+@font-face {
+  font-family: 'Martian Mono';
+  src: url('/fonts/martian-mono-100_800-normal.woff2') format('woff2');
+  font-weight: 100 800; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Host Grotesk';
+  src: url('/fonts/host-grotesk-300_800-normal.woff2') format('woff2');
+  font-weight: 300 800; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  /* Amber phosphor over peat water (DESIGN.md) */
+  --c-bg: #0b0a08;
+  --c-fg: #efe6d2;
+  --c-muted: #a39a86;
+  --c-line: rgb(239 230 210 / 0.14);
+  --c-accent: #f2a93b;
+  --c-eye: #9cc4c9;
+  --c-curtain: #1a130a;
+  --c-panel: rgb(11 10 8 / 0.82);
+
+  --f-display: 'Martian Mono', ui-monospace, Menlo, monospace;
+  --f-mono: 'Martian Mono', ui-monospace, Menlo, monospace;
+  --f-body: 'Host Grotesk', system-ui, sans-serif;
+
+  --t-mega: clamp(4.2rem, 0.6rem + 17vw, 19rem);
+  --t-xl: clamp(2.3rem, 1.2rem + 4.4vw, 5.4rem);
+  --t-l: clamp(1.6rem, 1.15rem + 1.9vw, 2.9rem);
+  --t-m: clamp(1.2rem, 1.08rem + 0.55vw, 1.55rem);
+  --t-body: clamp(1.0625rem, 1rem + 0.2vw, 1.15rem);
+  --t-s: 0.875rem;
+  --t-xs: 0.75rem;
+
+  --u: clamp(0.5rem, 0.35rem + 0.6vw, 1rem);
+  --gutter: clamp(1rem, 0.6rem + 1.6vw, 2.5rem);
+  --cols: 12;
+  --radius: 0px;
+
+  --z-gl: 0; --z-content: 1; --z-header: 50; --z-cursor: 80; --z-curtain: 90; --z-loader: 100;
+  --e-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-soft: cubic-bezier(0.215, 0.61, 0.355, 1);
+}

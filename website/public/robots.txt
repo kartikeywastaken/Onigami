@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://onigami.dev/sitemap-index.xml

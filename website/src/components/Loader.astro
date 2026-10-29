@@ -1,0 +1,10 @@
+---
+import { site } from '../data/site';
+---
+<div id="loader" role="status" aria-label="Loading onigami">
+  <div class="loader__row">
+    <p class="loader__line"><span data-loader-out>$ onigami wake<span class="caret" aria-hidden="true"></span></span></p>
+    <p class="loader__line loader__right"><span data-loader-out>v{site.version}</span> <span class="loader__count" data-loader-out data-loader-count>000%</span></p>
+  </div>
+  <div class="loader__bar" data-loader-bar></div>
+</div>

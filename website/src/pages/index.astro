@@ -1,0 +1,114 @@
+---
+import Base from '../layouts/Base.astro';
+import { site, chapters, commands } from '../data/site';
+const brew = site.install[0].cmd;
+---
+<Base>
+  <main id="main" tabindex="-1" data-well="home">
+    <section class="hero" data-hero aria-labelledby="hero-title">
+      <div class="hero__stage">
+        <div class="hero__a" data-hero-a>
+          <h1 id="hero-title" class="hero__title">
+            <span class="hero__word" data-split="chars" data-intro>onigami</span>
+            <span class="hero__sub" data-split="lines" data-intro data-delay="0.3">sends a crew of agents at the target you are cleared to test, and proves what it finds.</span>
+          </h1>
+          <div class="hero__cta" data-hero-meta>
+            <p class="cmdline"><span class="prompt" aria-hidden="true">$</span> <code id="hero-cmd">{brew}</code></p>
+            <button class="btn btn--ghost" type="button" data-copy="hero-cmd" aria-label="Copy install command"><span class="btn__fill" aria-hidden="true"></span><span class="btn__label" data-copy-label>Copy</span></button>
+          </div>
+        </div>
+        <p class="hero__b" data-hero-b>The eye at the bottom sees the target the way an attacker would. Better it opens for you first.</p>
+        <div class="hero__foot">
+          <p class="hero__hint" data-hero-meta>Scroll to descend</p>
+          <p class="hero__depth" data-hero-meta><span class="muted">depth</span> <span data-depth>&minus;0.00 m</span></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="statement" data-after-hero aria-labelledby="why-title">
+      <h2 id="why-title" class="label">Why 鬼神</h2>
+      <p class="statement__text" data-split="lines">鬼神, onigami, is a fierce protective spirit: a demon you keep on your side. In an engagement you send one ahead. It walks the target the way an adversary would, finds the weak joins, and brings back proof, so that the real demon, when it comes, finds nothing left to take.</p>
+    </section>
+
+    <section class="session" aria-labelledby="session-title">
+      <div class="session__head">
+        <h2 id="session-title" class="h2" data-split="lines">Four stages, one engagement.</h2>
+        <p class="muted session__note">Example sessions. The output is illustrative.</p>
+      </div>
+      <div class="session__grid">
+        <ol class="session__chapters">
+          {chapters.map((c) => (
+            <li class="chapter" data-chapter={c.name} id={`verb-${c.id}`}>
+              <p class="chapter__cmd" aria-hidden="true"><span class="prompt">▸</span> stage · {c.name}</p>
+              <h3 class="chapter__title">{c.title}</h3>
+              <p class="chapter__text">{c.text}</p>
+              <pre class="chapter__inline term" aria-label={`Example: the ${c.name} stage`}>{c.session.map((l) => (
+                <span class={`ln ln--${l.k ?? 'out'}`}>{l.k === 'cmd' && <span class="prompt">$ </span>}<span class="ln__t">{l.t}</span>{'\n'}</span>
+              ))}</pre>
+            </li>
+          ))}
+        </ol>
+        <div class="session__term" aria-hidden="true">
+          <div class="term term--panel">
+            <p class="term__bar"><span data-session-name>onigami recon</span><span class="term__rule"></span><span>~/engagement</span></p>
+            {chapters.map((c, i) => (
+              <pre class="term__out" data-out={i} hidden={i !== 0}>{c.session.map((l) => (
+                <span class={`ln ln--${l.k ?? 'out'}`}>{l.k === 'cmd' && <span class="prompt">$ </span>}<span class="ln__t">{l.t}</span>{'\n'}</span>
+              ))}<span class="ln ln--cmd"><span class="prompt">$ </span><span class="caret"></span></span></pre>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="commands" aria-labelledby="cmd-title">
+      <div class="commands__head">
+        <h2 id="cmd-title" class="h2" data-split="lines">The whole crew, on one screen.</h2>
+        <a class="u-link commands__more" href="/manual/">Open the manual<span class="arrow" aria-hidden="true">→</span></a>
+      </div>
+      <ul class="index">
+        {commands.map((c) => (
+          <li>
+            <a class="index__row" href={`/manual/#${c.name}`} data-decode data-ripple>
+              <span class="index__name"><span class="prompt" aria-hidden="true">▸ </span><span data-decode-text>{c.name}</span></span>
+              <span class="index__sum">{c.summary}</span>
+              <code class="index__syn">{c.synopsis}</code>
+              <span class="index__arrow" aria-hidden="true">→</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="local" aria-labelledby="local-title">
+      <pre class="local__tree term" role="img" aria-label="Listing of the ~/.onigami folder: the findings notebook and the audit log, plus the gitignored .env" data-reveal="clip">{`~/.onigami
+├── findings-20261029.jsonl   64 records
+│   ├── ✓ verified   produced by a tool
+│   └── · claim      kept apart, never acted on
+└── audit.log                 gated actions
+
+.env  ->  Groq keys + tunables (gitignored)`}</pre>
+      <div class="local__copy">
+        <h2 id="local-title" class="h2" data-split="lines">The model reasons. The tools decide.</h2>
+        <p>Every finding onigami keeps was produced by a real scanner or the CVE databases. An agent's own claim is stored apart, marked unverified, and never acted on, so an invented result cannot slip into the report or into an exploit.</p>
+        <p>Scope is enforced in code before any packet is sent, live exploitation is paused for your approval, and every gated action is written to the audit log. onigami talks to the Groq API to think and to the target to test; it never makes a finding up.</p>
+      </div>
+    </section>
+
+    <section id="install" class="install" data-finale aria-labelledby="install-title">
+      <h2 id="install-title" class="install__title" data-split="chars">Send it in.</h2>
+      <div class="install__box">
+        <div class="install__tabs" role="group" aria-label="Install method">
+          {site.install.map((m, i) => (
+            <button type="button" class="tab" data-tab={m.cmd} aria-pressed={i === 0 ? 'true' : 'false'}>{m.label}</button>
+          ))}
+        </div>
+        <div class="install__line">
+          <p class="cmdline cmdline--big"><span class="prompt" aria-hidden="true">$</span> <code id="install-cmd">{brew}</code></p>
+          <button class="btn" type="button" data-copy="install-cmd" aria-label="Copy install command"><span class="btn__fill" aria-hidden="true"></span><span class="btn__label" data-copy-label>Copy</span></button>
+        </div>
+        <p class="install__then muted">Then <code>SCOPE=target onigami --tui --mission "…"</code>. macOS and Linux, {site.license} licensed, version {site.version}.</p>
+      </div>
+    </section>
+  </main>
+</Base>

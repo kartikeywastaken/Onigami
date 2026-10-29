@@ -1,0 +1,18 @@
+---
+import Mark from './Mark.astro';
+import { site } from '../data/site';
+---
+<header class="frame" data-layer="content">
+  <a class="frame__tl brand" href="/">
+    <Mark class="brand__mark" />
+    <span class="brand__name">onigami</span>{' '}
+    <span class="brand__ver">{site.version}</span><span class="sr-only">, home</span>
+  </a>
+  <nav class="frame__tr" data-nav aria-label="Primary">
+    <ul>
+      <li><a class="nav-link" href="/manual/" data-decode><span data-decode-text>Manual</span></a></li>
+      <li><a class="nav-link" href="/#install" data-decode><span data-decode-text>Install</span></a></li>
+      <li><a class="nav-link" href={site.github} data-decode rel="noopener"><span data-decode-text>GitHub</span><span class="sr-only"> (external)</span></a></li>
+    </ul>
+  </nav>
+</header>
