@@ -23,10 +23,27 @@ func step(t *testing.T, m model, msg tea.Msg) model {
 
 func testModel() model {
 	return newModel(Config{
-		Scope:    "demo.testfire.net",
-		Findings: tools.NewFindingsStore(),
-		Start:    func(agent.Observer, agent.Approver) (string, error) { return "", nil },
+		Findings:       tools.NewFindingsStore(),
+		PrefillTarget:  "demo.testfire.net",
+		PrefillMission: "assess the target",
+		Start: func(string, string, agent.Observer, agent.Approver) (string, error) {
+			return "", nil
+		},
 	})
+}
+
+// dashboardModel returns a model advanced past the landing screen into the live
+// dashboard (the landing form submitted with the prefilled target + mission), so
+// dashboard-focused tests start where they expect.
+func dashboardModel(t *testing.T, w, h int) model {
+	t.Helper()
+	m := testModel()
+	m = step(t, m, tea.WindowSizeMsg{Width: w, Height: h})
+	m, _ = m.submitLanding()
+	if m.phase != phaseDashboard {
+		t.Fatalf("expected to reach the dashboard after submit, got phase %v (err %q)", m.phase, m.inputError)
+	}
+	return m
 }
 
 // assertFits fails if the rendered view is taller/wider than the terminal — the
@@ -47,8 +64,7 @@ func assertFits(t *testing.T, m model, w, h int) {
 func TestFlow(t *testing.T) {
 	for _, sz := range [][2]int{{80, 24}, {60, 16}, {200, 50}} {
 		w, h := sz[0], sz[1]
-		m := testModel()
-		m = step(t, m, tea.WindowSizeMsg{Width: w, Height: h})
+		m := dashboardModel(t, w, h)
 		if !m.ready {
 			t.Fatalf("not ready after WindowSizeMsg at %dx%d", w, h)
 		}
@@ -80,8 +96,7 @@ func TestFlow(t *testing.T) {
 
 // TestFindingsTable checks the findings pane fills from the shared store on tick.
 func TestFindingsTable(t *testing.T) {
-	m := testModel()
-	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m := dashboardModel(t, 100, 30)
 	m.cfg.Findings.Add("recon", "discover", "port 80/tcp open: Apache-Coyote", "")
 	m.cfg.Findings.Add("recon", "enumerate", "/login.jsp", "")
 	m = step(t, m, tickMsg{})
@@ -96,8 +111,7 @@ func TestFindingsTable(t *testing.T) {
 
 // TestApprovalModal: a request shows the modal and keys answer the gate.
 func TestApprovalModal(t *testing.T) {
-	m := testModel()
-	m = step(t, m, tea.WindowSizeMsg{Width: 90, Height: 28})
+	m := dashboardModel(t, 90, 28)
 
 	reply := make(chan bool, 1)
 	m = step(t, m, approvalReqMsg{role: agent.RoleExploitDev, reply: reply})
@@ -125,8 +139,7 @@ func TestApprovalModal(t *testing.T) {
 
 // TestFocusToggle cycles focus between the activity and findings panes.
 func TestFocusToggle(t *testing.T) {
-	m := testModel()
-	m = step(t, m, tea.WindowSizeMsg{Width: 90, Height: 28})
+	m := dashboardModel(t, 90, 28)
 	if m.focus != paneActivity {
 		t.Fatal("should start focused on activity")
 	}
@@ -141,8 +154,7 @@ func TestFocusToggle(t *testing.T) {
 
 // TestDone marks the run finished and freezes the dashboard without panicking.
 func TestDone(t *testing.T) {
-	m := testModel()
-	m = step(t, m, tea.WindowSizeMsg{Width: 90, Height: 28})
+	m := dashboardModel(t, 90, 28)
 	m = step(t, m, doneMsg{summary: "all clear", err: nil})
 	if !m.done || m.summary != "all clear" {
 		t.Fatalf("done=%v summary=%q", m.done, m.summary)
@@ -151,6 +163,46 @@ func TestDone(t *testing.T) {
 		t.Fatal("finished state not shown")
 	}
 	assertFits(t, m, 90, 28)
+}
+
+// TestLanding checks the first screen shows the wordmark + input box and that
+// submitting a valid form transitions to the dashboard.
+func TestLanding(t *testing.T) {
+	m := testModel()
+	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	if m.phase != phaseLanding {
+		t.Fatal("should start on the landing screen")
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "Target") || !strings.Contains(view, "Mission") {
+		t.Fatal("landing screen should show the Target and Mission fields")
+	}
+	assertFits(t, m, 100, 30)
+
+	// Enter submits the prefilled form and moves to the dashboard.
+	m = step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.phase != phaseDashboard {
+		t.Fatalf("enter should move to the dashboard, still on %v", m.phase)
+	}
+	if m.scope != "demo.testfire.net" {
+		t.Errorf("submitted target not captured as scope: %q", m.scope)
+	}
+}
+
+// TestLandingRejectsEmpty keeps the landing screen until a target is entered.
+func TestLandingRejectsEmpty(t *testing.T) {
+	m := newModel(Config{
+		Findings: tools.NewFindingsStore(),
+		Start:    func(string, string, agent.Observer, agent.Approver) (string, error) { return "", nil },
+	})
+	m = step(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.phase != phaseLanding {
+		t.Fatal("empty form must not submit")
+	}
+	if m.inputError == "" {
+		t.Fatal("expected an inline error for the empty target")
+	}
 }
 
 // TestTooSmall renders a guard message instead of a broken layout.

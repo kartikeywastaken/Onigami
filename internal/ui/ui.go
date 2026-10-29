@@ -23,12 +23,22 @@ import (
 
 // Config is what main hands the dashboard to run one engagement.
 type Config struct {
-	Scope    string               // the in-scope target(s), shown in the header
 	Findings *tools.FindingsStore // polled to fill the findings table
-	// Start runs the blocking engagement. The UI supplies the observer (feeds the
-	// activity log + roster) and the approver (the approval modal), and Start
-	// returns the final report summary and any error.
-	Start func(obs agent.Observer, approver agent.Approver) (string, error)
+
+	// PrefillTarget/PrefillMission seed the landing form (e.g. from --scope /
+	// --mission flags); the operator can still edit them before starting.
+	PrefillTarget  string
+	PrefillMission string
+
+	// Validate checks a target the operator entered on the landing screen before
+	// the engagement starts (e.g. scope parsing). nil skips the check. A non-nil
+	// error is shown inline on the form.
+	Validate func(target string) error
+
+	// Start runs the blocking engagement against the submitted target and mission.
+	// The UI supplies the observer (feeds the activity log + roster) and the
+	// approver (the approval modal); Start returns the final report and any error.
+	Start func(target, mission string, obs agent.Observer, approver agent.Approver) (string, error)
 }
 
 // --- messages that cross from the engagement goroutine into the Elm loop -----
@@ -52,7 +62,11 @@ type tickMsg struct{}
 // Run shows the dashboard for one engagement and blocks until the user quits.
 // It returns the final report summary and the engagement's error (if any).
 func Run(cfg Config) (string, error) {
+	// The landing form submits the target+mission here; the engagement goroutine
+	// below waits on it, so nothing runs until the operator starts it.
+	startCh := make(chan startParams, 1)
 	m := newModel(cfg)
+	m.startCh = startCh
 	prog := tea.NewProgram(m)
 
 	// Observer bridge: every agent event becomes one message. Send is safe from
@@ -73,11 +87,16 @@ func Run(cfg Config) (string, error) {
 	}
 
 	go func() {
-		summary, err := cfg.Start(obs, approver)
+		p, ok := <-startCh // wait for the landing form to submit
+		if !ok {
+			return // program quit before starting
+		}
+		summary, err := cfg.Start(p.target, p.mission, obs, approver)
 		prog.Send(doneMsg{summary: summary, err: err})
 	}()
 
 	final, err := prog.Run()
+	close(startCh)
 	if err != nil {
 		return "", err
 	}

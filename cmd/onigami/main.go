@@ -62,13 +62,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The user MUST define the scope. Every scan tool enforces it; nothing is
-	// scanned outside it. (For a CTF, this is just the box's IP or range.)
-	sc, err := promptScope()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "scope error:", err)
-		os.Exit(1)
-	}
+	// Scope (the authorized target) is MANDATORY. In the TUI it's entered on the
+	// landing screen; in plain mode it's prompted below. Every scan tool enforces
+	// it; nothing is scanned outside it.
 
 	// Per-agent keys: each specialist can use its own API key, which only helps
 	// with rate limits if the keys belong to SEPARATE Groq accounts (limits are
@@ -113,7 +109,7 @@ func main() {
 	// and both engagement drivers (the structured pipeline and the LLM
 	// orchestrator), use it with their own observer/approver — so the engagement
 	// itself is identical; only how we watch it and answer the gate differ.
-	makeConfig := func(observer agent.Observer, approver agent.Approver) orchestrator.Config {
+	makeConfig := func(sc *scope.Scope, observer agent.Observer, approver agent.Approver) orchestrator.Config {
 		return orchestrator.Config{
 			Orchestrator: orchClient,
 			Analyst:      analystClient,
@@ -136,26 +132,16 @@ func main() {
 		}
 	}
 
-	// The mission is the operator's objective — what the crew should achieve. It
-	// is MANDATORY: supplied via --mission, the ONIGAMI_MISSION env var, or an
-	// interactive prompt. With no mission the run does not start.
-	mission, err := resolveMission(*missionFlag)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mission error:", err)
-		os.Exit(1)
-	}
-
-	// drive runs one engagement with the given observer/approver and returns its
+	// driveWith runs one engagement on the given scope + mission and returns its
 	// summary. By default it's the structured stage pipeline (recon → web →
 	// triage → exploit-dev → exploiter), which guarantees the progression;
 	// --llm-orch selects the older free-form LLM brain instead.
-	drive := func(observer agent.Observer, approver agent.Approver) (string, error) {
-		cfg := makeConfig(observer, approver)
+	driveWith := func(sc *scope.Scope, mission string, observer agent.Observer, approver agent.Approver) (string, error) {
+		cfg := makeConfig(sc, observer, approver)
 		if *llmOrchFlag {
-			objective := mission
 			brief := fmt.Sprintf("%s\n\nIN-SCOPE TARGETS (authorized): %s\nStay strictly within this scope. Work in steps and delegate to your specialists.",
-				objective, sc)
-			rep, e := orchestrator.New(cfg).Run(context.Background(), agent.Task{Objective: objective, Brief: brief}, observer)
+				mission, sc)
+			rep, e := orchestrator.New(cfg).Run(context.Background(), agent.Task{Objective: mission, Brief: brief}, observer)
 			return rep.Summary, e
 		}
 		return orchestrator.NewPipeline(cfg, mission).Run(context.Background())
@@ -163,23 +149,44 @@ func main() {
 
 	var report agent.Report
 	if *tuiFlag {
-		// Dashboard: the UI runs the engagement on a goroutine and supplies the
-		// observer (activity stream) and approver (the footer proceed/hold gate).
+		// Dashboard: the landing screen collects the target + mission, then the UI
+		// runs the engagement on a goroutine, supplying the observer (activity
+		// stream) and approver (the footer proceed/hold gate).
 		summary, runErr := ui.Run(ui.Config{
-			Scope:    sc.String(),
-			Findings: findings,
-			Start: func(observer agent.Observer, approver agent.Approver) (string, error) {
+			Findings:       findings,
+			PrefillTarget:  strings.TrimSpace(os.Getenv("SCOPE")),
+			PrefillMission: strings.TrimSpace(firstNonEmpty(*missionFlag, os.Getenv("ONIGAMI_MISSION"))),
+			Validate: func(target string) error {
+				_, e := scope.Parse(target)
+				return e
+			},
+			Start: func(target, mission string, observer agent.Observer, approver agent.Approver) (string, error) {
+				sc, e := scope.Parse(target)
+				if e != nil {
+					return "", e
+				}
 				// Route Groq retry/backoff notices into the activity stream as
 				// events, so they don't write over the alt-screen TUI.
 				llm.RetryNotifier = func(msg string) {
 					observer(agent.Event{Agent: agent.Role("groq"), Kind: agent.EventMessage, Text: msg})
 				}
 				defer func() { llm.RetryNotifier = nil }()
-				return drive(observer, approver)
+				return driveWith(sc, mission, observer, approver)
 			},
 		})
 		report, err = agent.Report{Summary: summary}, runErr
 	} else {
+		// Plain mode: scope + mission are prompted here, before the engagement.
+		sc, scErr := promptScope()
+		if scErr != nil {
+			fmt.Fprintln(os.Stderr, "scope error:", scErr)
+			os.Exit(1)
+		}
+		mission, mErr := resolveMission(*missionFlag)
+		if mErr != nil {
+			fmt.Fprintln(os.Stderr, "mission error:", mErr)
+			os.Exit(1)
+		}
 		// Plain line output (the default): print the banner, then stream events.
 		fmt.Printf("\nonigami — engagement\n")
 		fmt.Printf("driver:   %s\n", driverName(*llmOrchFlag))
@@ -197,7 +204,7 @@ func main() {
 		fmt.Printf("findings: %s\n", findings.Path())
 		fmt.Println(strings.Repeat("─", 64))
 
-		summary, runErr := drive(obs, terminalApprover)
+		summary, runErr := driveWith(sc, mission, obs, terminalApprover)
 		report, err = agent.Report{Summary: summary}, runErr
 	}
 
@@ -270,6 +277,16 @@ func primeNmapSudo() {
 			_ = exec.Command("sudo", "-n", "-v").Run()
 		}
 	}()
+}
+
+// firstNonEmpty returns the first argument that isn't blank, or "" if all are.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // modelEnv returns the model id from env var `name`, or `def` if it's unset.

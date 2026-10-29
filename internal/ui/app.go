@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -19,6 +20,14 @@ import (
 	"onigami/internal/config"
 )
 
+// phase is which screen the UI is showing.
+type phase int
+
+const (
+	phaseLanding   phase = iota // the title + target/mission input box
+	phaseDashboard              // the live three-pane engagement dashboard
+)
+
 // pane identifies the scroll-focusable panes (the roster is status-only).
 type pane int
 
@@ -26,6 +35,20 @@ const (
 	paneActivity pane = iota
 	paneFindings
 )
+
+// landingField identifies which input the landing form has focused.
+type landingField int
+
+const (
+	fieldTarget landingField = iota
+	fieldMission
+)
+
+// startParams is what the landing form submits to launch the engagement.
+type startParams struct {
+	target  string
+	mission string
+}
 
 type model struct {
 	cfg    Config
@@ -42,7 +65,16 @@ type model struct {
 	width, height int
 	ready         bool
 	isDark        bool
+	phase         phase
 	focus         pane
+
+	// landing form
+	target     textinput.Model
+	mission    textinput.Model
+	field      landingField
+	inputError string
+	startCh    chan startParams // Run waits on this; nil in tests
+	scope      string           // the submitted target, shown in the header
 
 	events    []agent.Event
 	maxEvents int
@@ -66,6 +98,13 @@ func newModel(cfg Config) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 
+	target := textinput.New()
+	target.Placeholder = "demo.testfire.net  (host, IP, CIDR, or URL)"
+	target.SetValue(cfg.PrefillTarget)
+	mission := textinput.New()
+	mission.Placeholder = "Find and PoC an exploitable web vulnerability"
+	mission.SetValue(cfg.PrefillMission)
+
 	m := model{
 		cfg:       cfg,
 		styles:    newStyles(true), // rebuilt once we learn the real background
@@ -76,17 +115,22 @@ func newModel(cfg Config) model {
 		activity:  viewport.New(),
 		findings:  table.New(),
 		agents:    newRoster(),
+		phase:     phaseLanding,
 		follow:    true,
 		focus:     paneActivity,
+		target:    target,
+		mission:   mission,
+		field:     fieldTarget,
 		maxEvents: config.IntEnv("ONIGAMI_UI_SCROLLBACK", 500),
 		tickEvery: config.SecondsEnv("ONIGAMI_UI_TICK", time.Second),
 	}
 	(&m).restyle()
+	(&m).focusField(fieldTarget)
 	return m
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.sp.Tick, m.watch.Start(), tickCmd(m.tickEvery))
+	return tea.Batch(tea.RequestBackgroundColor, m.sp.Tick, textinput.Blink)
 }
 
 func tickCmd(d time.Duration) tea.Cmd {
@@ -97,14 +141,27 @@ func tickCmd(d time.Duration) tea.Cmd {
 func (m *model) restyle() {
 	m.sp.Style = m.styles.gold
 	m.findings.SetStyles(m.styles.tableStyles())
-	// Help keys/descriptions carry the green ground too, so the footer tints evenly.
-	bg := m.styles.bg
-	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.styles.flower).Background(bg)
-	m.help.Styles.ShortDesc = lipgloss.NewStyle().Foreground(m.styles.muted).Background(bg)
-	m.help.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(m.styles.line).Background(bg)
-	m.help.Styles.FullKey = lipgloss.NewStyle().Foreground(m.styles.flower).Background(bg)
-	m.help.Styles.FullDesc = lipgloss.NewStyle().Foreground(m.styles.muted).Background(bg)
-	m.help.Styles.FullSeparator = lipgloss.NewStyle().Foreground(m.styles.line).Background(bg)
+	m.target.SetStyles(m.styles.inputTheme)
+	m.mission.SetStyles(m.styles.inputTheme)
+	// Help keys/descriptions are foreground-only, matching the single green ground.
+	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.styles.flower)
+	m.help.Styles.ShortDesc = lipgloss.NewStyle().Foreground(m.styles.muted)
+	m.help.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(m.styles.line)
+	m.help.Styles.FullKey = lipgloss.NewStyle().Foreground(m.styles.flower)
+	m.help.Styles.FullDesc = lipgloss.NewStyle().Foreground(m.styles.muted)
+	m.help.Styles.FullSeparator = lipgloss.NewStyle().Foreground(m.styles.line)
+}
+
+// focusField moves focus between the two landing inputs.
+func (m *model) focusField(f landingField) {
+	m.field = f
+	if f == fieldTarget {
+		m.target.Focus()
+		m.mission.Blur()
+	} else {
+		m.mission.Focus()
+		m.target.Blur()
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -173,6 +230,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watch, cmd = m.watch.Update(msg)
 		return m, cmd
 	}
+
+	// Blink and other textinput messages while on the landing screen.
+	if m.phase == phaseLanding {
+		var cmd tea.Cmd
+		if m.field == fieldTarget {
+			m.target, cmd = m.target.Update(msg)
+		} else {
+			m.mission, cmd = m.mission.Update(msg)
+		}
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -184,6 +252,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 		}
 		return m, tea.Quit
+	}
+
+	if m.phase == phaseLanding {
+		return m.handleLandingKey(msg)
 	}
 
 	// While the approval modal is open, keys answer it and nothing else.
@@ -229,6 +301,81 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleLandingKey drives the title/input screen: tab switches fields, enter
+// submits and transitions to the dashboard, everything else types.
+func (m model) handleLandingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit) && m.field == fieldTarget && m.target.Value() == "" && m.mission.Value() == "":
+		// A bare q on an empty form quits (so the landing isn't a trap); once the
+		// user is typing, q is just a character.
+		return m, tea.Quit
+	case msg.String() == "tab" || msg.String() == "down":
+		if m.field == fieldTarget {
+			(&m).focusField(fieldMission)
+		} else {
+			(&m).focusField(fieldTarget)
+		}
+		return m, textinput.Blink
+	case msg.String() == "shift+tab" || msg.String() == "up":
+		if m.field == fieldMission {
+			(&m).focusField(fieldTarget)
+		} else {
+			(&m).focusField(fieldMission)
+		}
+		return m, textinput.Blink
+	case msg.String() == "enter":
+		return m.submitLanding()
+	}
+
+	var cmd tea.Cmd
+	if m.field == fieldTarget {
+		m.target, cmd = m.target.Update(msg)
+	} else {
+		m.mission, cmd = m.mission.Update(msg)
+	}
+	return m, cmd
+}
+
+// submitLanding validates the form and, if it's good, transitions to the
+// dashboard and signals the engagement to start. On the first empty field it
+// focuses it and shows an inline error instead.
+func (m model) submitLanding() (model, tea.Cmd) {
+	target := strings.TrimSpace(m.target.Value())
+	mission := strings.TrimSpace(m.mission.Value())
+	if target == "" {
+		m.inputError = "a target is required"
+		(&m).focusField(fieldTarget)
+		return m, nil
+	}
+	if mission == "" {
+		m.inputError = "a mission is required"
+		(&m).focusField(fieldMission)
+		return m, nil
+	}
+	if m.cfg.Validate != nil {
+		if err := m.cfg.Validate(target); err != nil {
+			m.inputError = err.Error()
+			(&m).focusField(fieldTarget)
+			return m, nil
+		}
+	}
+
+	m.inputError = ""
+	m.scope = target
+	m.phase = phaseDashboard
+	(&m).layout()
+	(&m).renderActivity()
+	(&m).refreshFindings()
+
+	cmds := []tea.Cmd{m.sp.Tick, m.watch.Start(), tickCmd(m.tickEvery)}
+	if m.startCh != nil {
+		ch := m.startCh
+		p := startParams{target: target, mission: mission}
+		cmds = append(cmds, func() tea.Msg { ch <- p; return nil })
+	}
+	return m, tea.Batch(cmds...)
+}
+
 // --- layout ------------------------------------------------------------------
 
 func (m *model) layout() {
@@ -236,6 +383,17 @@ func (m *model) layout() {
 		return
 	}
 	m.help.SetWidth(m.width)
+
+	// Landing inputs span most of the frame box.
+	iw := m.width/2 - 8
+	if iw < 24 {
+		iw = 24
+	}
+	if iw > 80 {
+		iw = 80
+	}
+	m.target.SetWidth(iw)
+	m.mission.SetWidth(iw)
 
 	headerH := lipgloss.Height(m.headerView())
 	footerH := lipgloss.Height(m.footerView())
@@ -336,27 +494,77 @@ func (m *model) renderActivity() {
 
 func (m model) View() tea.View {
 	if !m.ready {
-		// Set the green ground from the very first frame, before any content, so the
-		// dashboard "loads onto" the tint rather than painting it over black.
+		// Set the green ground from the very first frame, before any content.
 		v := tea.NewView("")
 		v.BackgroundColor = m.styles.bg
 		return v
 	}
-	if m.width < 60 || m.height < 16 {
+
+	var content string
+	switch {
+	case m.width < 60 || m.height < 16:
 		box := m.styles.errText.Render("terminal too small — need at least 60×16")
-		v := tea.NewView(m.styles.app.Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceStyle(m.styles.app))))
-		v.AltScreen = true
-		v.BackgroundColor = m.styles.bg
-		return v
-	}
-	if m.pending != nil {
-		v := tea.NewView(m.modalView())
-		v.AltScreen = true
-		v.WindowTitle = "onigami — approval"
-		v.BackgroundColor = m.styles.bg
-		return v
+		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	case m.pending != nil:
+		content = m.modalView()
+	case m.phase == phaseLanding:
+		content = m.landingView()
+	default:
+		content = m.dashboardView()
 	}
 
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.WindowTitle = "onigami"
+	// The green ground is the TERMINAL's own background — one back layer, set
+	// once. All content is drawn foreground-only on top, so nothing overwrites the
+	// tint with a competing fill and no cell falls back to black.
+	v.BackgroundColor = m.styles.bg
+	if m.phase == phaseLanding {
+		v.Cursor = m.activeInput().Cursor()
+	}
+	return v
+}
+
+func (m model) activeInput() textinput.Model {
+	if m.field == fieldMission {
+		return m.mission
+	}
+	return m.target
+}
+
+// landingView is the first screen: the onigami wordmark and a framed box that
+// takes the target link and the mission, centered on the green ground.
+func (m model) landingView() string {
+	logo := m.styles.logo.Render(asciiLogo)
+	tagline := m.styles.tagline.Render("agentic red-team crew · authorized targets only")
+
+	label := func(active bool, s string) string {
+		mark := m.styles.hint.Render("  ")
+		if active {
+			mark = m.styles.accent.Render("❯ ")
+		}
+		return mark + m.styles.fieldLabel.Render(s)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		label(m.field == fieldTarget, "Target"),
+		m.target.View(),
+		"",
+		label(m.field == fieldMission, "Mission"),
+		m.mission.View(),
+	)
+	box := m.styles.inputFrame.Render(body)
+
+	foot := m.styles.hint.Render("tab switch field · enter start · ctrl+c quit")
+	if m.inputError != "" {
+		foot = m.styles.errText.Render("⚠ " + m.inputError)
+	}
+
+	stacked := lipgloss.JoinVertical(lipgloss.Center, logo, tagline, "", box, "", foot)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, stacked)
+}
+
+func (m model) dashboardView() string {
 	rosterBody := m.agents.view(m.styles, m.sp.View(), m.rosterW-4, m.topH-3)
 	rosterPane := m.renderPane("AGENTS", rosterBody, m.rosterW, m.topH, false)
 	activityPane := m.renderPane("ACTIVITY", m.activity.View(), m.activityW, m.topH, m.focus == paneActivity)
@@ -364,15 +572,7 @@ func (m model) View() tea.View {
 
 	findPane := m.renderPane(fmt.Sprintf("FINDINGS (%d)", m.findingsCount), m.findings.View(), m.width, m.findingsH, m.focus == paneFindings)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, m.headerView(), top, findPane, m.footerView())
-	// The green ground is the terminal's OWN background (BackgroundColor below),
-	// set once as a back layer — so streaming output never overwrites the tint and
-	// leaves black gaps. The app wrapper keeps the composed frame on the same tint.
-	v := tea.NewView(m.styles.app.Width(m.width).Height(m.height).Render(content))
-	v.AltScreen = true
-	v.WindowTitle = "onigami"
-	v.BackgroundColor = m.styles.bg
-	return v
+	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), top, findPane, m.footerView())
 }
 
 func (m model) renderPane(title, body string, outerW, outerH int, focused bool) string {
@@ -381,12 +581,11 @@ func (m model) renderPane(title, body string, outerW, outerH int, focused bool) 
 		st = m.styles.paneFocused
 	}
 	// In lipgloss v2, Width and Height are the TOTAL size (border + padding
-	// included), so the pane gets the full outer dimensions. The usable text area
-	// is outer minus the frame. We hard-clip the body to that exact text area
-	// (width and line count) so no child line can wrap or overflow and push the
-	// pane past its height — the one thing that would break the alt-screen layout.
-	hFrame := st.GetHorizontalFrameSize() // border 2 + padding 2
-	vFrame := st.GetVerticalFrameSize()   // border 2
+	// included). The usable text area is outer minus the frame; we hard-clip the
+	// body to it so no child line can wrap or overflow and break the alt-screen
+	// layout.
+	hFrame := st.GetHorizontalFrameSize()
+	vFrame := st.GetVerticalFrameSize()
 	textW := outerW - hFrame
 	body = clampBlock(body, textW, (outerH-vFrame)-1) // content lines minus title
 	inner := clipLine(m.styles.paneTitle.Render(title), textW) + "\n" + body
@@ -411,7 +610,7 @@ func clampBlock(s string, w, h int) string {
 
 func (m model) headerView() string {
 	left := m.styles.kanji.Render("鬼神") + " " + m.styles.brand.Render("onigami") +
-		m.styles.meta.Render("  scope ") + m.styles.scope.Render(m.cfg.Scope)
+		m.styles.meta.Render("  scope ") + m.styles.scope.Render(m.scope)
 	right := m.statusText() +
 		m.styles.meta.Render("  ⏱ ") + m.styles.body.Render(m.elapsed()) +
 		m.styles.meta.Render("  findings ") + m.styles.accent.Render(fmt.Sprint(m.findingsCount))
@@ -420,10 +619,9 @@ func (m model) headerView() string {
 	if gap < 1 {
 		gap = 1
 	}
-	// Clip to a single line so a narrow terminal truncates rather than wraps
-	// (which would throw off the height budget). The gap is painted with the
-	// body style so it carries the green ground rather than the terminal default.
-	return clipLine(left+m.styles.body.Render(strings.Repeat(" ", gap))+right, m.width)
+	// Clip to a single line so a narrow terminal truncates rather than wraps. The
+	// gap is plain spaces: with no background, they show the green ground.
+	return clipLine(left+strings.Repeat(" ", gap)+right, m.width)
 }
 
 func (m model) statusText() string {
@@ -469,12 +667,11 @@ func (m model) modalView() string {
 			m.styles.accent.Render("h") + m.styles.meta.Render(" hold"),
 	}
 	box := m.styles.modal.Render(strings.Join(lines, "\n"))
-	return m.styles.app.Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceStyle(m.styles.app)))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// formatEvent renders one event as a wrapped, colored line, using the garden
-// metaphor: → gold stems for tool calls, ✿ the grown flower for a report, 鬼 the
-// oni for an error.
+// formatEvent renders one event as a colored line. Everything is foreground-only
+// so the green ground shows through; no separator paints its own background.
 func (m model) formatEvent(e agent.Event, width int) string {
 	indent := strings.Repeat("  ", e.Depth)
 	label := m.styles.role(string(e.Agent)).Render(string(e.Agent))
@@ -499,19 +696,21 @@ func (m model) formatEvent(e agent.Event, width int) string {
 		icon, text = " ", m.styles.body.Render(oneLine(e.Text))
 	}
 
-	// Every separator and the indent are painted with the body style so they
-	// carry the green ground — a plain space after a styled segment's reset would
-	// otherwise show the terminal's default (a black gap) until the next color.
-	sp := m.styles.body.Render
-	line := sp(indent) + icon + sp(" ") + label + sp("  ") + text
+	line := indent + icon + " " + label + "  " + text
 	if width > 0 {
-		// Pad to the pane width on the green ground so the activity area tints evenly.
-		return m.styles.body.Width(width).Render(line)
+		return clipLine(line, width)
 	}
 	return line
 }
 
 // --- small helpers -----------------------------------------------------------
+
+// asciiLogo is the onigami wordmark on the landing screen.
+const asciiLogo = `   ____  _   _ _____ _____    _    __  __ ___
+  / __ \| \ | |_   _/ ____|  / \  |  \/  |_ _|
+ | |  | |  \| | | || |  _   / _ \ | |\/| || |
+ | |__| | |\  | | || |_| | / ___ \| |  | || |
+  \____/|_| \_| |_| \____|/_/   \_\_|  |_|___|`
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
