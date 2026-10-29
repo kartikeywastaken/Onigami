@@ -67,9 +67,10 @@ type Config struct {
 
 	Scope    *scope.Scope
 	Observer agent.Observer
-	Approver agent.Approver    // human gate on the Exploit-Dev's output and each MSF run
-	MSF      *tools.MSFManager // Metasploit daemon manager (nil/unavailable = no exploiter)
-	Audit    *tools.AuditLog   // audit log for the exploiter
+	Approver agent.Approver       // human gate on the Exploit-Dev's output and each MSF run
+	MSF      *tools.MSFManager    // Metasploit daemon manager (nil/unavailable = no exploiter)
+	Audit    *tools.AuditLog      // audit log for the exploiter
+	Findings *tools.FindingsStore // shared, durable engagement notebook (every worker writes to it)
 }
 
 // New builds the orchestrator agent, fully wired to its workers and their tools.
@@ -102,7 +103,7 @@ func New(cfg Config) *agent.Agent {
 		func() *agent.Agent {
 			// The Analyst gets the real recon + CVE + http tools (only scanners
 			// that are installed), all bound to the scope.
-			tb := agent.NewToolSet(tools.AnalystTools(cfg.Scope)...)
+			tb := agent.NewToolSet(tools.AnalystTools(cfg.Scope, cfg.Findings)...)
 			return workers.NewAnalyst(cfg.Analyst, analystModel, tb, workerDepth)
 		},
 		cfg.Observer,
@@ -117,7 +118,7 @@ func New(cfg Config) *agent.Agent {
 		"dispatch_web_tester",
 		"Spawn a fresh Web-Tester to actively test an in-scope web app for OWASP Top-10 issues (SQLi, command injection, XSS, access control, TLS, misconfig). Provide a complete brief including what recon already found; it has no prior context.",
 		func() *agent.Agent {
-			tb := agent.NewToolSet(tools.WebTesterTools(cfg.Scope)...)
+			tb := agent.NewToolSet(tools.WebTesterTools(cfg.Scope, cfg.Findings)...)
 			return workers.NewWebTester(cfg.WebTester, webTesterModel, tb, workerDepth)
 		},
 		cfg.Observer,

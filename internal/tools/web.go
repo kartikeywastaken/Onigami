@@ -290,7 +290,7 @@ func (t TestSSL) Run(ctx context.Context, input json.RawMessage) (string, error)
 // are installed, plus the manual primitives (http_request, tcp_probe) it needs
 // to craft payloads and confirm findings, plus CVE research. Everything is
 // bound to the scope.
-func WebTesterTools(sc *scope.Scope) []agent.Tool {
+func WebTesterTools(sc *scope.Scope, findings *FindingsStore) []agent.Tool {
 	var ts []agent.Tool
 	if installed("sqlmap") {
 		ts = append(ts, SQLMap{sc})
@@ -312,7 +312,7 @@ func WebTesterTools(sc *scope.Scope) []agent.Tool {
 	}
 	// Manual primitives + research + working memory, always available.
 	ts = append(ts, NewHTTPRequest(sc), NewTCPProbe(sc), CVESearch{}, CVEDetail{})
-	ts = append(ts, NotebookTools()...)
+	ts = append(ts, NotebookTools(findings, "web-tester")...)
 	return ts
 }
 

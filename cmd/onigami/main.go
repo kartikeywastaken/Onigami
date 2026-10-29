@@ -91,6 +91,11 @@ func main() {
 	msfMgr := tools.NewMSFManager()
 	defer msfMgr.Shutdown()
 
+	// Shared, disk-backed findings store: every worker records into it, so a
+	// rate-limit 429 or a give-up mid-run no longer loses what was learned — we
+	// can always write a report from it (see the end of main).
+	findings := tools.NewFindingsStore()
+
 	orch := orchestrator.New(orchestrator.Config{
 		Orchestrator: orchClient,
 		Analyst:      analystClient,
@@ -99,6 +104,7 @@ func main() {
 		Exploiter:    exploitClient, // reuses the exploit key unless you split it
 		MSF:          msfMgr,
 		Audit:        audit,
+		Findings:     findings,
 
 		OrchestratorModel: orchModel,
 		AnalystModel:      analystModel,
@@ -122,6 +128,7 @@ func main() {
 		fmt.Printf("audit:    %s\n", audit.Path())
 	}
 	fmt.Printf("keys:     %s\n", keyStatus())
+	fmt.Printf("findings: %s\n", findings.Path())
 	fmt.Println(strings.Repeat("─", 64))
 
 	objective := "Assess the in-scope target(s) for exploitable vulnerabilities and, if you confirm one, have the Exploit-Dev produce a proof-of-concept."
@@ -132,14 +139,35 @@ func main() {
 		Objective: objective,
 		Brief:     brief,
 	}, obs)
+
+	// Always produce output. Whether the orchestrator finished cleanly or the run
+	// died (a rate-limit 429, a worker give-up), we print what was actually
+	// gathered — findings are durable in the store, so the engagement is never a
+	// total loss. The orchestrator's own summary is shown when it produced one.
+	fmt.Println(strings.Repeat("─", 64))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "run failed:", err)
+		fmt.Fprintln(os.Stderr, "run ended early:", err)
+		fmt.Println("RUN ENDED EARLY — reporting what was gathered before it stopped:")
+		fmt.Println()
+		fmt.Println(findingsReport(findings))
 		os.Exit(1)
 	}
-
-	fmt.Println(strings.Repeat("─", 64))
 	fmt.Println("FINAL REPORT:")
-	fmt.Println(report.Summary)
+	if s := strings.TrimSpace(report.Summary); s != "" {
+		fmt.Println(s)
+	} else {
+		// The orchestrator finished without writing a summary — fall back to the
+		// findings so the operator still gets the engagement's results.
+		fmt.Println("(the orchestrator produced no written summary; findings below)")
+	}
+	fmt.Println()
+	fmt.Println(findingsReport(findings))
+}
+
+// findingsReport renders the shared findings store for the final output.
+func findingsReport(f *tools.FindingsStore) string {
+	return fmt.Sprintf("ENGAGEMENT FINDINGS (%d, persisted at %s):\n%s",
+		f.Count(), f.Path(), f.Report())
 }
 
 // defaultGroqModel is our pick for agentic tool-calling. gpt-oss-120b has

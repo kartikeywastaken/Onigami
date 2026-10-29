@@ -145,6 +145,34 @@ func (t *HTTPRequest) Run(ctx context.Context, input json.RawMessage) (string, e
 	return truncate(b.String()), nil
 }
 
+// fetchGet does a scope-checked GET and returns the status, headers, and a
+// bounded body. It's the primitive the coded recon sweep uses to fingerprint and
+// enumerate (it reads more body than the display path, since it parses it).
+func (t *HTTPRequest) fetchGet(ctx context.Context, rawurl string) (int, http.Header, string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawurl))
+	if err != nil || u.Host == "" {
+		return 0, nil, "", fmt.Errorf("invalid url %q", rawurl)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return 0, nil, "", fmt.Errorf("url scheme must be http or https")
+	}
+	if !t.scope.Allows(u.Hostname()) {
+		return 0, nil, "", fmt.Errorf("host %q is OUT OF SCOPE", u.Hostname())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	req.Header.Set("User-Agent", "onigami/0.1")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	return resp.StatusCode, resp.Header, string(raw), nil
+}
+
 // reportedHeaders is the curated set we surface — the security-relevant and
 // fingerprinting ones — to keep token use (and the TPM budget) in check.
 var reportedHeaders = []string{

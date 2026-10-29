@@ -85,33 +85,37 @@ func (n Nmap) Run(ctx context.Context, input json.RawMessage) (string, error) {
 	if err := checkTarget(n.Scope, in.Target); err != nil {
 		return "", err
 	}
+	if in.Ports != "" && !portsRe.MatchString(in.Ports) {
+		return "", fmt.Errorf("invalid ports spec %q", in.Ports)
+	}
+	return nmapScan(ctx, in.Target, in.Ports)
+}
 
-	// Flag choices come from measured behaviour against real, firewalled hosts:
-	//  - An explicit curated port list beats --top-ports: the latter both times
-	//    out under -sV and returns firewall false-positives while MISSING 80/443.
-	//  - -n (no DNS), --max-retries 2, --version-intensity 2 keep it fast.
-	//  - -Pn: skip host discovery (many hosts drop pings).
-	//  - --host-timeout bounds a stubborn host instead of hanging.
+// nmapScan runs a version-detection scan of target (ports "" means the curated
+// default list) and returns the raw output. Factored out so both the nmap tool
+// and the coded recon sweep use identical, measured flags. The caller is
+// responsible for the scope/format check on target.
+//
+// Flag choices come from measured behaviour against real, firewalled hosts:
+//   - An explicit curated port list beats --top-ports: the latter both times out
+//     under -sV and returns firewall false-positives while MISSING 80/443.
+//   - -n (no DNS), --max-retries 2, --version-intensity 2 keep it fast.
+//   - -Pn: skip host discovery (many hosts drop pings).
+//   - --host-timeout bounds a stubborn host instead of hanging.
+//   - SYN scan (-sS) when root/sudo-primed; else the (slower) connect scan.
+func nmapScan(ctx context.Context, target, ports string) (string, error) {
 	args := []string{"-Pn", "-n", "-T4", "--max-retries", "2", "--host-timeout", "150s"}
-
-	// SYN scan (-sS) is faster and far more accurate than the unprivileged
-	// connect scan, but it needs root. Use it when we're root or sudo is primed
-	// (see main.go); otherwise fall back silently to the connect scan.
 	useSudo, privileged := nmapPrivilege()
 	if privileged {
 		args = append(args, "-sS")
 	}
 	args = append(args, "-sV", "--version-intensity", "2")
-
-	if in.Ports != "" {
-		if !portsRe.MatchString(in.Ports) {
-			return "", fmt.Errorf("invalid ports spec %q", in.Ports)
-		}
-		args = append(args, "-p", in.Ports)
+	if ports != "" {
+		args = append(args, "-p", ports)
 	} else {
 		args = append(args, "-p", defaultNmapPorts)
 	}
-	args = append(args, in.Target)
+	args = append(args, target)
 
 	// sudo needs nmap's absolute path (its secure_path rarely includes
 	// /opt/homebrew/bin) and the -n flag so it never blocks on a prompt.
@@ -201,8 +205,14 @@ func (r RustScan) Run(ctx context.Context, input json.RawMessage) (string, error
 // AnalystTools returns the Analyst's real tool belt: whichever scanners are
 // installed on this machine (bound to the scope), plus the two CVE research
 // tools (which need no scope, since they only query databases).
-func AnalystTools(sc *scope.Scope) []agent.Tool {
+func AnalystTools(sc *scope.Scope, findings *FindingsStore) []agent.Tool {
 	var ts []agent.Tool
+	// recon_sweep runs the whole mechanical recon in one coded call (Phase 2) —
+	// the primary entry point; the individual scanners below remain for targeted
+	// follow-up.
+	if installed("nmap") {
+		ts = append(ts, NewReconSweep(sc, findings))
+	}
 	if installed("rustscan") {
 		ts = append(ts, RustScan{sc})
 	}
@@ -218,7 +228,7 @@ func AnalystTools(sc *scope.Scope) []agent.Tool {
 	ts = append(ts, NewHTTPRequest(sc))
 	ts = append(ts, NewTCPProbe(sc))
 	ts = append(ts, CVESearch{}, CVEDetail{})
-	ts = append(ts, NotebookTools()...) // working memory: record_finding / list_findings
+	ts = append(ts, NotebookTools(findings, "analyst")...) // shared engagement notebook
 	return ts
 }
 
