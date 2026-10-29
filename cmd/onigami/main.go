@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,9 +16,15 @@ import (
 	"onigami/internal/orchestrator"
 	"onigami/internal/scope"
 	"onigami/internal/tools"
+	"onigami/internal/ui"
 )
 
 func main() {
+	// --tui opts into the terminal dashboard; by default we keep the plain line
+	// printer, which stays clean when piped/teed to a log file.
+	tuiFlag := flag.Bool("tui", false, "show the live terminal dashboard instead of plain line output")
+	flag.Parse()
+
 	// loading env
 	if err := config.LoadDotenv(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: could not read .env:", err)
@@ -96,49 +103,68 @@ func main() {
 	// can always write a report from it (see the end of main).
 	findings := tools.NewFindingsStore()
 
-	orch := orchestrator.New(orchestrator.Config{
-		Orchestrator: orchClient,
-		Analyst:      analystClient,
-		WebTester:    webTesterClient,
-		ExploitDev:   exploitClient,
-		Exploiter:    exploitClient, // reuses the exploit key unless you split it
-		MSF:          msfMgr,
-		Audit:        audit,
-		Findings:     findings,
+	// newOrch builds the orchestrator crew. Both the plain and TUI paths use it
+	// with their own observer/approver, so the engagement itself is identical —
+	// only how we watch it, and how the approval gate is answered, differ.
+	newOrch := func(observer agent.Observer, approver agent.Approver) *agent.Agent {
+		return orchestrator.New(orchestrator.Config{
+			Orchestrator: orchClient,
+			Analyst:      analystClient,
+			WebTester:    webTesterClient,
+			ExploitDev:   exploitClient,
+			Exploiter:    exploitClient, // reuses the exploit key unless you split it
+			MSF:          msfMgr,
+			Audit:        audit,
+			Findings:     findings,
 
-		OrchestratorModel: orchModel,
-		AnalystModel:      analystModel,
-		WebTesterModel:    webTesterModel,
-		ExploitDevModel:   exploitDevModel,
-		ExploiterModel:    exploiterModel,
+			OrchestratorModel: orchModel,
+			AnalystModel:      analystModel,
+			WebTesterModel:    webTesterModel,
+			ExploitDevModel:   exploitDevModel,
+			ExploiterModel:    exploiterModel,
 
-		Scope:    sc,
-		Observer: obs,
-		Approver: terminalApprover, // proceed/hold gate on the PoC and each MSF run
-	})
-
-	fmt.Printf("\nonigami — engagement\n")
-	fmt.Printf("models:   orch=%s  analyst=%s  web=%s  exploit=%s  exploiter=%s\n",
-		orchModel, analystModel, webTesterModel, exploitDevModel, exploiterModel)
-	fmt.Printf("scope:    %s\n", sc)
-	fmt.Printf("scanners: %s\n", tools.ScannerStatus())
-	fmt.Printf("web:      %s\n", tools.WebTesterStatus())
-	fmt.Printf("exploit:  %s\n", tools.MSFStatus(msfMgr))
-	if msfMgr.Available() {
-		fmt.Printf("audit:    %s\n", audit.Path())
+			Scope:    sc,
+			Observer: observer,
+			Approver: approver,
+		})
 	}
-	fmt.Printf("keys:     %s\n", keyStatus())
-	fmt.Printf("findings: %s\n", findings.Path())
-	fmt.Println(strings.Repeat("─", 64))
 
 	objective := "Assess the in-scope target(s) for exploitable vulnerabilities and, if you confirm one, have the Exploit-Dev produce a proof-of-concept."
 	brief := fmt.Sprintf("%s\n\nIN-SCOPE TARGETS (authorized): %s\nStay strictly within this scope. Work in steps and delegate to your specialists.",
 		objective, sc)
+	task := agent.Task{Objective: objective, Brief: brief}
 
-	report, err := orch.Run(context.Background(), agent.Task{
-		Objective: objective,
-		Brief:     brief,
-	}, obs)
+	var report agent.Report
+	if *tuiFlag {
+		// Dashboard: the UI runs the engagement on a goroutine and supplies the
+		// observer (activity stream) and approver (the footer proceed/hold gate).
+		summary, runErr := ui.Run(ui.Config{
+			Scope:    sc.String(),
+			Findings: findings,
+			Start: func(observer agent.Observer, approver agent.Approver) (string, error) {
+				rep, e := newOrch(observer, approver).Run(context.Background(), task, observer)
+				return rep.Summary, e
+			},
+		})
+		report, err = agent.Report{Summary: summary}, runErr
+	} else {
+		// Plain line output (the default): print the banner, then stream events.
+		fmt.Printf("\nonigami — engagement\n")
+		fmt.Printf("models:   orch=%s  analyst=%s  web=%s  exploit=%s  exploiter=%s\n",
+			orchModel, analystModel, webTesterModel, exploitDevModel, exploiterModel)
+		fmt.Printf("scope:    %s\n", sc)
+		fmt.Printf("scanners: %s\n", tools.ScannerStatus())
+		fmt.Printf("web:      %s\n", tools.WebTesterStatus())
+		fmt.Printf("exploit:  %s\n", tools.MSFStatus(msfMgr))
+		if msfMgr.Available() {
+			fmt.Printf("audit:    %s\n", audit.Path())
+		}
+		fmt.Printf("keys:     %s\n", keyStatus())
+		fmt.Printf("findings: %s\n", findings.Path())
+		fmt.Println(strings.Repeat("─", 64))
+
+		report, err = newOrch(obs, terminalApprover).Run(context.Background(), task, obs)
+	}
 
 	// Always produce output. Whether the orchestrator finished cleanly or the run
 	// died (a rate-limit 429, a worker give-up), we print what was actually
