@@ -71,16 +71,26 @@ Read order for the design: `agent/agent.go` → `workers/workers.go` →
    # optional: GROQ_MODEL=openai/gpt-oss-120b
    ```
 
-2. Give it a mission and a target. The mission is **required** (it is prompted if
-   unset):
+2. Give it a mission and an in-scope target. Both are **required**; onigami prompts
+   for whatever you don't supply before any scan runs.
 
    ```bash
+   # mission via flag (or ONIGAMI_MISSION); scope prompted interactively
    go run ./cmd/onigami --mission "assess the in-scope web app for exploitable issues"
-   # live terminal dashboard instead of plain output:
+
+   # or prefill the scope and skip the prompt
+   SCOPE=demo.testfire.net go run ./cmd/onigami --mission "..."
+
+   # live terminal dashboard — enter the target + mission on the landing screen
    go run ./cmd/onigami --tui
    ```
 
-Only point onigami at systems you are authorized to test. Scope is enforced in code.
+   - **Mission**: `--mission`, the `ONIGAMI_MISSION` env var, or the prompt.
+   - **Scope (the authorized target)**: the `SCOPE` env var, the plain-mode prompt,
+     or the TUI landing screen. It's mandatory and enforced in code — every scan is
+     checked against it.
+
+Only point onigami at systems you are authorized to test.
 
 ### Tools
 
