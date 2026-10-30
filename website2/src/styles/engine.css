@@ -1,6 +1,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 * { margin: 0; }
-html { -webkit-text-size-adjust: none; text-size-adjust: none; background: var(--c-bg); color: var(--c-fg); overscroll-behavior: none; }
+html { -webkit-text-size-adjust: none; text-size-adjust: none; background: var(--c-bg); color: var(--c-fg); overscroll-behavior: none; scrollbar-width: none; -ms-overflow-style: none; }
+html::-webkit-scrollbar { width: 0; height: 0; display: none; }
 body {
   min-height: 100dvh; font-family: var(--f-body); font-size: var(--t-body); line-height: 1.55;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility;
