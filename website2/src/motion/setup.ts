@@ -3,7 +3,7 @@
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { navigate } from 'astro:transitions/client';
-import { onPage, onScroll, setTransition, ease, isTouch, prefersReducedMotion } from '../engine';
+import { onPage, onScroll, setTransition, ease, isTouch, prefersReducedMotion, scrollToTarget } from '../engine';
 import { Garden, PRESETS } from '../garden/core.js';
 import { run } from '../garden/shell';
 import { initPalette, applyPalette, palette, setPalette, onPalette } from './theme';
@@ -81,6 +81,24 @@ export function setupMotion() {
       const here = a.pathname === location.pathname && !a.hash && a.origin === location.origin;
       if (here) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
+  });
+
+  // Same-page hash links (e.g. the "/#growth" Roadmap link): Lenis only hijacks
+  // bare "#id" links, so route "/path#id" through Lenis ourselves when the path is
+  // already the current one; otherwise let the browser navigate as usual.
+  onPage(() => {
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest<HTMLAnchorElement>('a[href]');
+      if (!a || a.origin !== location.origin || !a.hash || a.pathname !== location.pathname) return;
+      const el = document.querySelector(a.hash);
+      if (!el) return;
+      e.preventDefault();
+      scrollToTarget(el as HTMLElement);
+      history.pushState(null, '', a.hash);
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
   });
 
   // Palette swatches: any [data-swatch] on any page. The new colours bloom from the swatch.
